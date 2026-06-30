@@ -2,9 +2,9 @@
 # even though the plugin now also supports GitHub.
 id = "gitlab-ci-status"
 name = "GitLab & GitHub CI + Review Status"
-version = "0.4.0"
+version = "0.5.0"
 min_herdr_version = "0.7.0"
-description = "GitLab & GitHub CI and merge-request review status in herdr: a live colored dot, MR/PR number, and review-state glyph on each space's label, plus on-demand CI-detail and 'My MRs' panes. Auto-detects the provider from the repo's origin host."
+description = "GitLab & GitHub CI and merge-request review status in herdr: a live colored dot, MR/PR number, review-state glyph, plus 🟣 merged and 📍 local-only markers on each space's label, and on-demand CI-detail and 'My MRs' panes. Auto-detects the provider from the repo's origin host."
 platforms = ["linux", "macos"]
 
 [[actions]]

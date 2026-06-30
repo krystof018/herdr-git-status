@@ -30,8 +30,9 @@ ws_list() {
 # Resolve a repo's sidebar decoration into globals (NOT stdout) so it can run
 # without a subshell — that lets the MR/PR lookup reuse the path/branch/provider
 # that gci_latest_ci just resolved:
-#   SPACE_EMOJI  status emoji, "" (unsupported remote), or "SKIP" (transient error)
-#   SPACE_MR     open MR/PR token incl. sigil ("!123" / "#123") or "" (none)
+#   SPACE_EMOJI  CI status emoji; 🟣 (branch merged) or 📍 (local-only, never pushed)
+#                instead of a CI dot; "" (unsupported remote); or "SKIP" (transient error)
+#   SPACE_MR     open/merged MR/PR token incl. sigil ("!123" / "#123") or "" (none)
 status_for_repo() {
   local cwd="$1" rc glyph
   SPACE_EMOJI=""; SPACE_MR=""
@@ -40,6 +41,12 @@ status_for_repo() {
     1|2|3|4) return ;;
     5)       SPACE_EMOJI="SKIP"; return ;;
     0)
+      # Local-only branch (never pushed): no remote CI or PR is possible, so show just the
+      # local glyph and skip the network lookups below.
+      if gci_branch_is_local_only "$cwd" "$GCI_BRANCH"; then
+        SPACE_EMOJI="$GCI_LOCAL_EMOJI"
+        return
+      fi
       if [ -n "$GCI_STATUS" ]; then
         SPACE_EMOJI="$(gci_status_emoji "$GCI_STATUS")"
       else
@@ -49,6 +56,11 @@ status_for_repo() {
         gci_review_for_mr "$cwd" "$GCI_PATH" "$GCI_MR_IID" "$GCI_PROVIDER"
         glyph="$(gci_review_badge_glyph "$GCI_REVIEW")"
         SPACE_MR="$glyph$GCI_MR_SIGIL$GCI_MR_IID"
+      elif gci_merged_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
+        # No open PR, but the branch's work was merged — surface that (🟣 overrides the CI
+        # dot, since "merged" is the more useful signal once a branch has landed).
+        SPACE_EMOJI="$GCI_MERGED_EMOJI"
+        SPACE_MR="$GCI_MR_SIGIL$GCI_MR_IID"
       fi
       ;;
   esac

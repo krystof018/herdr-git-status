@@ -6,8 +6,10 @@ ways:
 
 1. **Live status dots in the spaces sidebar** — a background poller prefixes each space's label with a
    colored dot for its current branch's latest CI run (🟢 passed · 🟡 running · 🔴 failed · ⚪ none), plus
-   the open request number (`!123` for a GitLab MR, `#123` for a GitHub PR) when the branch has one. It
-   only edits the label text and never touches the agent status dot.
+   the open request number (`!123` for a GitLab MR, `#123` for a GitHub PR) when the branch has one. Two
+   extra glyphs take the dot slot for branch/PR lifecycle states: 🟣 when the branch's PR/MR is **merged**
+   (shown with the PR number, e.g. `🟣 #123`) and 📍 when the branch is **local-only** — never pushed, so
+   it has no remote CI or PR. It only edits the label text and never touches the agent status dot.
 2. **An on-demand detail pane** — project, current branch, the latest pipeline/run status,
    the open MR/PR, and a list of the most recent **failed** pipelines/runs for the branch
    (up to 5). The project path, each run/pipeline `#id`, and the `!123`/`#123` are clickable
@@ -56,6 +58,13 @@ needs attention or is ready: `💬` changes requested / unresolved threads · `�
 (needs rebase) · `✅` approved & mergeable (ready to merge). Drafts and MRs merely awaiting
 review show the plain `!123` / `#123` with no glyph. So a space might read `🟢 ✅!123 my-service`
 (green pipeline, MR approved) or `🔴 💬!88 billing-api` (red pipeline, changes requested).
+
+**Merged & local-only.** When a branch has no *open* MR/PR, the poller falls back to its most recent
+**merged** one and shows 🟣 with the number (e.g. `🟣 #518 shop`) — the 🟣 replaces the CI dot, since
+"merged" is the more useful signal once a branch has landed. A branch that was **never pushed** (no
+upstream and no `origin/<branch>` ref) shows 📍 instead of a CI dot and no PR number (`📍 my-feature`) —
+it can't have remote CI or a PR. Both glyphs are stripped on restore like the CI dots, so they survive
+your own renames and toggling the poller off.
 
 ## Requirements
 
@@ -156,9 +165,11 @@ glab/gh supply authentication and the host; the plugin stores no tokens of its o
 The poller (`poller-ctl.sh run`, launched detached by the `start`/`toggle` actions) loops every
 `GITLAB_CI_REFRESH` seconds: for each space it finds a pane cwd via `herdr pane list`, fetches the
 latest run and open MR/PR the same way, maps the status to a dot, and `herdr workspace rename`s the
-space to `"<dot> <sigil><num> <original label>"`. The original label is recovered each cycle by
-stripping any existing CI dot and `!`/`#` token, so it is idempotent and survives your own renames.
-`stop` kills the loop and restores all labels.
+space to `"<dot> <sigil><num> <original label>"`. If there is no open MR/PR it checks for a merged one
+(`…&state=merged` on GitLab; `…&state=closed` filtered to a non-null `merged_at` on GitHub) and shows
+🟣; if the branch has no upstream and no `origin/<branch>` ref it shows 📍 (a pure-git check, no API
+call). The original label is recovered each cycle by stripping any existing dot/glyph and `!`/`#` token,
+so it is idempotent and survives your own renames. `stop` kills the loop and restores all labels.
 
 ## Files
 
@@ -170,5 +181,5 @@ stripping any existing CI dot and `!`/`#` token, so it is idempotent and survive
 | `ci-pane.sh` | The detail pane's live fetch → render → sleep loop (`GITLAB_CI_ONCE=1` for one-shot output). |
 | `open-mr.sh` | Resolves the repo context and opens the "My MRs" pane. |
 | `mr-pane.sh` | The "My MRs" pane: my open MRs/PRs across providers, grouped ready / needs-action. |
-| `lib.sh` | Shared helpers: remote parsing, provider detection, GitLab/GitHub CI + MR/PR fetch, recent-failures fetch, provider-aware pane label, status glyph/emoji, relative time, hyperlink, env loader. |
+| `lib.sh` | Shared helpers: remote parsing, provider detection, GitLab/GitHub CI + open/merged MR/PR fetch, local-only branch check, recent-failures fetch, provider-aware pane label, status glyph/emoji, relative time, hyperlink, env loader. |
 | `test.sh` | Unit tests for `lib.sh`. Run with `bash test.sh`. |

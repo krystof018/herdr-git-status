@@ -45,7 +45,11 @@ build_frame() {
   proj_url="https://$GCI_HOST/$GCI_PATH"
   printf '%s %s · %s%s\n\n' "$GCI_BOLD" "$l" "$GCI_HOST/$GCI_PATH" "$GCI_RESET"
   printf '  Project   %s\n' "$(gci_hyperlink "$proj_url" "$GCI_PATH")"
-  printf '  Branch    %s\n\n' "$GCI_BRANCH"
+  if gci_branch_is_local_only "$REPO" "$GCI_BRANCH"; then
+    printf '  Branch    %s   %s📍 local only (not pushed)%s\n\n' "$GCI_BRANCH" "$GCI_GRAY" "$GCI_RESET"
+  else
+    printf '  Branch    %s\n\n' "$GCI_BRANCH"
+  fi
 
   if [ -z "$GCI_STATUS" ]; then
     printf '  %-8s  %sNone for %s%s\n' "$ci_word" "$GCI_GRAY" "$GCI_BRANCH" "$GCI_RESET"
@@ -57,9 +61,13 @@ build_frame() {
     [ -n "$rel" ] && printf '  Updated   %s\n' "$rel"
   fi
 
-  # Open MR/PR for this branch (the !123 / #123 is a clickable hyperlink).
+  # Open MR/PR for this branch (the !123 / #123 is a clickable hyperlink); if none is open,
+  # fall back to the most recent merged one so a landed branch still shows its PR.
   if gci_open_pr "$REPO" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
     printf '  %-8s  %s%s%s\n' \
+      "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$GCI_MR_URL" "$GCI_MR_SIGIL$GCI_MR_IID")" "$GCI_RESET"
+  elif gci_merged_pr "$REPO" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
+    printf '  %-8s  %s%s%s   🟣 merged\n' \
       "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$GCI_MR_URL" "$GCI_MR_SIGIL$GCI_MR_IID")" "$GCI_RESET"
   fi
 
