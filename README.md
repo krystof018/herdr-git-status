@@ -59,12 +59,15 @@ needs attention or is ready: `💬` changes requested / unresolved threads · `�
 review show the plain `!123` / `#123` with no glyph. So a space might read `🟢 ✅!123 my-service`
 (green pipeline, MR approved) or `🔴 💬!88 billing-api` (red pipeline, changes requested).
 
-**Merged & local-only.** When a branch has no *open* MR/PR, the poller falls back to its most recent
-**merged** one and shows 🟣 with the number (e.g. `🟣 #518 shop`) — the 🟣 replaces the CI dot, since
-"merged" is the more useful signal once a branch has landed. A branch that was **never pushed** (no
-upstream and no `origin/<branch>` ref) shows 📍 instead of a CI dot and no PR number (`📍 my-feature`) —
-it can't have remote CI or a PR. Both glyphs are stripped on restore like the CI dots, so they survive
-your own renames and toggling the poller off.
+**Merged & local-only.** When a feature branch has no *open* MR/PR, the poller falls back to its most
+recent **merged** one and shows 🟣 with the number (e.g. `🟣 #5194 my-feature`) — the 🟣 replaces the CI
+dot, since "merged" is the more useful signal once a branch has landed. Merged takes precedence over the
+local-only check, so a branch whose remote was deleted after merge still shows 🟣 (not 📍). A branch that
+was **never pushed** — no upstream, no `origin/<branch>` ref, and no merged PR — shows 📍 instead of a CI
+dot and no number (`📍 my-feature`). The **default branch** (trunk, e.g. `main`) is never decorated with a
+PR/merged token — it just shows its CI dot — so a "merge `main` into X" PR (whose head is `main`) doesn't
+tag `main` as merged. All glyphs are stripped on restore, so they survive your own renames and toggling
+the poller off.
 
 ## Requirements
 
@@ -165,11 +168,12 @@ glab/gh supply authentication and the host; the plugin stores no tokens of its o
 The poller (`poller-ctl.sh run`, launched detached by the `start`/`toggle` actions) loops every
 `GITLAB_CI_REFRESH` seconds: for each space it finds a pane cwd via `herdr pane list`, fetches the
 latest run and open MR/PR the same way, maps the status to a dot, and `herdr workspace rename`s the
-space to `"<dot> <sigil><num> <original label>"`. If there is no open MR/PR it checks for a merged one
-(`…&state=merged` on GitLab; `…&state=closed` filtered to a non-null `merged_at` on GitHub) and shows
-🟣; if the branch has no upstream and no `origin/<branch>` ref it shows 📍 (a pure-git check, no API
-call). The original label is recovered each cycle by stripping any existing dot/glyph and `!`/`#` token,
-so it is idempotent and survives your own renames. `stop` kills the loop and restores all labels.
+space to `"<dot> <sigil><num> <original label>"`. On the **default branch** (resolved from origin/HEAD,
+no API call) it stops there — just the CI dot. Otherwise, if there is no open MR/PR it checks for a
+merged one (`…&state=merged` on GitLab; `…&state=closed` filtered to a non-null `merged_at` on GitHub)
+and shows 🟣; only when there is no PR at all and the branch has no upstream / `origin/<branch>` ref does
+it show 📍. The original label is recovered each cycle by stripping any existing dot/glyph and `!`/`#`
+token, so it is idempotent and survives your own renames. `stop` kills the loop and restores all labels.
 
 ## Files
 

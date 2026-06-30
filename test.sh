@@ -117,6 +117,19 @@ gci_branch_is_local_only "$lodir" "$lobr"; check "local-only-no"  "1" "$?"
 gci_branch_is_local_only "$lodir" ""; check "local-only-noarg" "1" "$?"
 rm -rf "$lodir"
 
+# gci_default_branch — from origin/HEAD, with origin/main|master fallback
+dbdir="$(mktemp -d)"
+git -C "$dbdir" init -q 2>/dev/null
+git -C "$dbdir" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>/dev/null
+check "default-none" "" "$(gci_default_branch "$dbdir")"                  # no remote refs yet
+git -C "$dbdir" update-ref refs/remotes/origin/master HEAD 2>/dev/null
+check "default-master-fallback" "master" "$(gci_default_branch "$dbdir")" # origin/master present
+git -C "$dbdir" update-ref refs/remotes/origin/main HEAD 2>/dev/null
+check "default-main-fallback" "main" "$(gci_default_branch "$dbdir")"     # origin/main preferred
+git -C "$dbdir" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master 2>/dev/null
+check "default-head-ref" "master" "$(gci_default_branch "$dbdir")"        # origin/HEAD wins
+rm -rf "$dbdir"
+
 # gci_review_glyph — full canonical vocabulary -> emoji
 check "rg-conflict" "⚠️" "$(gci_review_glyph conflict)"
 check "rg-changes"  "💬" "$(gci_review_glyph changes)"

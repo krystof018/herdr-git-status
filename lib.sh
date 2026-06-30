@@ -421,6 +421,21 @@ gci_branch_is_local_only() {
   return 0
 }
 
+# Print the repo's default branch (trunk) name, e.g. "main" — resolved from the local
+# origin/HEAD symbolic ref (set at clone time, or via `git remote set-head origin -a`), with
+# a fall back to origin/main then origin/master when origin/HEAD isn't set. Empty if unknown.
+# Pure git, no network. Used to skip PR/merged decoration on the trunk: a "merge main into X"
+# PR has head=main, and the trunk is not a feature branch worth tagging.
+gci_default_branch() {
+  local repo="$1" ref
+  ref="$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" \
+    && { printf '%s' "${ref#origin/}"; return 0; }
+  for ref in main master; do
+    git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$ref" && { printf '%s' "$ref"; return 0; }
+  done
+  return 0
+}
+
 # Resolve the canonical review state of a single open MR/PR. Network call; dispatches on
 # <provider>. Sets GCI_REVIEW to conflict|changes|draft|approved|awaiting, or "" on any
 # error/missing data (callers fall back to no glyph). <repo> supplies CLI auth/host context.

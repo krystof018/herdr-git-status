@@ -43,9 +43,25 @@ build_frame() {
   local ci_word pr_word proj_url rel ci_tok
   if [ "$GCI_PROVIDER" = "github" ]; then ci_word="Run"; pr_word="PR"; else ci_word="Pipeline"; pr_word="MR"; fi
   proj_url="https://$GCI_HOST/$GCI_PATH"
+
+  # Resolve the PR/branch situation up front (same precedence as the sidebar): the trunk
+  # branch gets no PR decoration; otherwise prefer the open PR, else the most recent merged
+  # one. "local only" is shown only when the branch truly has no PR (not merged-then-deleted).
+  local default mr_iid="" mr_url="" mr_sigil="" mr_merged=0 local_only=0
+  default="$(gci_default_branch "$REPO")"
+  if [ -z "$default" ] || [ "$GCI_BRANCH" != "$default" ]; then
+    if gci_open_pr "$REPO" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
+      mr_iid="$GCI_MR_IID"; mr_url="$GCI_MR_URL"; mr_sigil="$GCI_MR_SIGIL"
+    elif gci_merged_pr "$REPO" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
+      mr_iid="$GCI_MR_IID"; mr_url="$GCI_MR_URL"; mr_sigil="$GCI_MR_SIGIL"; mr_merged=1
+    elif gci_branch_is_local_only "$REPO" "$GCI_BRANCH"; then
+      local_only=1
+    fi
+  fi
+
   printf '%s %s · %s%s\n\n' "$GCI_BOLD" "$l" "$GCI_HOST/$GCI_PATH" "$GCI_RESET"
   printf '  Project   %s\n' "$(gci_hyperlink "$proj_url" "$GCI_PATH")"
-  if gci_branch_is_local_only "$REPO" "$GCI_BRANCH"; then
+  if [ "$local_only" -eq 1 ]; then
     printf '  Branch    %s   %s📍 local only (not pushed)%s\n\n' "$GCI_BRANCH" "$GCI_GRAY" "$GCI_RESET"
   else
     printf '  Branch    %s\n\n' "$GCI_BRANCH"
@@ -61,14 +77,15 @@ build_frame() {
     [ -n "$rel" ] && printf '  Updated   %s\n' "$rel"
   fi
 
-  # Open MR/PR for this branch (the !123 / #123 is a clickable hyperlink); if none is open,
-  # fall back to the most recent merged one so a landed branch still shows its PR.
-  if gci_open_pr "$REPO" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
-    printf '  %-8s  %s%s%s\n' \
-      "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$GCI_MR_URL" "$GCI_MR_SIGIL$GCI_MR_IID")" "$GCI_RESET"
-  elif gci_merged_pr "$REPO" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
-    printf '  %-8s  %s%s%s   🟣 merged\n' \
-      "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$GCI_MR_URL" "$GCI_MR_SIGIL$GCI_MR_IID")" "$GCI_RESET"
+  # Open or merged MR/PR for this branch (the !123 / #123 is a clickable hyperlink).
+  if [ -n "$mr_iid" ]; then
+    if [ "$mr_merged" -eq 1 ]; then
+      printf '  %-8s  %s%s%s   🟣 merged\n' \
+        "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$mr_url" "$mr_sigil$mr_iid")" "$GCI_RESET"
+    else
+      printf '  %-8s  %s%s%s\n' \
+        "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$mr_url" "$mr_sigil$mr_iid")" "$GCI_RESET"
+    fi
   fi
 
   # Recent failed pipelines/runs for this branch (newest first, each #id a clickable link).
