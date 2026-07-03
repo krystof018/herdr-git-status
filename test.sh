@@ -115,6 +115,8 @@ gci_branch_is_local_only "$lodir" "$lobr"; check "local-only-yes" "0" "$?"   # n
 git -C "$lodir" update-ref "refs/remotes/origin/$lobr" HEAD 2>/dev/null      # simulate a pushed branch
 gci_branch_is_local_only "$lodir" "$lobr"; check "local-only-no"  "1" "$?"
 gci_branch_is_local_only "$lodir" ""; check "local-only-noarg" "1" "$?"
+gci_branch_is_local_only "" "$lobr"; check "local-only-norepo" "1" "$?"   # empty repo must not fall through to CWD
+gci_branch_is_local_only "$lodir" "no-such-branch"; check "local-only-nobranch" "1" "$?"
 rm -rf "$lodir"
 
 # gci_default_branch — from origin/HEAD, with origin/main|master fallback

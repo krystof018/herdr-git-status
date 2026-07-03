@@ -383,7 +383,7 @@ gci_open_pr() {
 # sets GCI_MR_IID, GCI_MR_URL, GCI_MR_SIGIL ("" on error/none).
 # Return: 0 found | 1 missing args | 2 api-error | 3 no merged MR/PR.
 gci_merged_pr() {
-  local repo="$1" path="$2" branch="$3" provider="$4" enc resp owner merged_at
+  local repo="$1" path="$2" branch="$3" provider="$4" enc resp owner
   GCI_MR_IID=""; GCI_MR_URL=""; GCI_MR_SIGIL=""
   [ -n "$path" ] && [ -n "$branch" ] || return 1
   if [ "$provider" = "gitlab" ]; then
@@ -395,13 +395,12 @@ gci_merged_pr() {
   elif [ "$provider" = "github" ]; then
     GCI_MR_SIGIL="#"
     owner="${path%%/*}"
-    # state=closed returns both merged and closed-unmerged PRs; only a non-null merged_at
-    # marks an actual merge, so reject the latter (most recent first via sort=updated).
-    resp="$(cd "$repo" && gh api "repos/$path/pulls?head=$owner:$branch&state=closed&sort=updated&direction=desc&per_page=1" 2>/dev/null)" || return 2
-    merged_at="$(printf '%s' "$resp" | jq -r '.[0].merged_at // empty' 2>/dev/null)"
-    [ -n "$merged_at" ] || return 3
-    GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].number // empty' 2>/dev/null)"
-    GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].html_url // empty' 2>/dev/null)"
+    # state=closed returns both merged and closed-unmerged PRs (newest-updated first); pick the
+    # most recent one that actually merged — a non-null merged_at. Taking just .[0] would report
+    # "no merged PR" whenever the newest closed PR is closed-unmerged, hiding an older real merge.
+    resp="$(cd "$repo" && gh api "repos/$path/pulls?head=$owner:$branch&state=closed&sort=updated&direction=desc&per_page=30" 2>/dev/null)" || return 2
+    GCI_MR_IID="$(printf '%s' "$resp" | jq -r 'map(select(.merged_at != null)) | .[0].number // empty' 2>/dev/null)"
+    GCI_MR_URL="$(printf '%s' "$resp" | jq -r 'map(select(.merged_at != null)) | .[0].html_url // empty' 2>/dev/null)"
   else
     return 1
   fi
@@ -411,11 +410,14 @@ gci_merged_pr() {
 
 # Is <branch> local-only — i.e. never pushed, so it has no remote CI or PR? True (return 0)
 # when the branch has neither an upstream tracking ref configured nor an origin/<branch>
-# remote-tracking ref. Pure git, no network call. Return 1 otherwise (tracks a remote, or
-# args missing). <repo> is the worktree path; <branch> the current branch name.
+# remote-tracking ref. Pure git, no network call. Return 1 otherwise (tracks a remote, args
+# missing, or the branch doesn't exist locally). <repo> is the worktree path; <branch> the
+# current branch name. <repo> is required: an empty repo would let `git -C` fall through to the
+# caller's CWD and misclassify an unrelated branch.
 gci_branch_is_local_only() {
   local repo="$1" branch="$2"
-  [ -n "$branch" ] || return 1
+  [ -n "$repo" ] && [ -n "$branch" ] || return 1
+  git -C "$repo" show-ref --verify --quiet "refs/heads/$branch" || return 1
   git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name "$branch@{upstream}" >/dev/null 2>&1 && return 1
   git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch" && return 1
   return 0

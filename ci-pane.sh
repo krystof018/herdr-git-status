@@ -62,7 +62,7 @@ build_frame() {
   printf '%s %s · %s%s\n\n' "$GCI_BOLD" "$l" "$GCI_HOST/$GCI_PATH" "$GCI_RESET"
   printf '  Project   %s\n' "$(gci_hyperlink "$proj_url" "$GCI_PATH")"
   if [ "$local_only" -eq 1 ]; then
-    printf '  Branch    %s   %s📍 local only (not pushed)%s\n\n' "$GCI_BRANCH" "$GCI_GRAY" "$GCI_RESET"
+    printf '  Branch    %s   %s%s local only (not pushed)%s\n\n' "$GCI_BRANCH" "$GCI_GRAY" "$GCI_LOCAL_EMOJI" "$GCI_RESET"
   else
     printf '  Branch    %s\n\n' "$GCI_BRANCH"
   fi
@@ -80,8 +80,8 @@ build_frame() {
   # Open or merged MR/PR for this branch (the !123 / #123 is a clickable hyperlink).
   if [ -n "$mr_iid" ]; then
     if [ "$mr_merged" -eq 1 ]; then
-      printf '  %-8s  %s%s%s   🟣 merged\n' \
-        "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$mr_url" "$mr_sigil$mr_iid")" "$GCI_RESET"
+      printf '  %-8s  %s%s%s   %s merged\n' \
+        "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$mr_url" "$mr_sigil$mr_iid")" "$GCI_RESET" "$GCI_MERGED_EMOJI"
     else
       printf '  %-8s  %s%s%s\n' \
         "$pr_word" "$GCI_BOLD" "$(gci_hyperlink "$mr_url" "$mr_sigil$mr_iid")" "$GCI_RESET"
