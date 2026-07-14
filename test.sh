@@ -65,6 +65,12 @@ check "prov-github"  "github" "$(gci_provider github.com)"
 check "prov-gh-ent"  "github" "$(gci_provider github.acme.com)"
 check "prov-self-gl" "gitlab" "$(gci_provider gitlab.example.org)"
 check "prov-none"    ""       "$(gci_provider bitbucket.org)"
+# custom self-hosted host with no "gitlab"/"github" in it — needs the env override
+check "prov-custom-none" ""   "$(gci_provider git.otainsight.com)"
+check "prov-gl-env"  "gitlab" "$(GCI_GITLAB_HOSTS='git.otainsight.com code.internal' gci_provider git.otainsight.com)"
+check "prov-gl-env-csv" "gitlab" "$(GCI_GITLAB_HOSTS='a.com,git.otainsight.com' gci_provider git.otainsight.com)"
+check "prov-gh-env"  "github" "$(GCI_GITHUB_HOSTS='scm.acme.io' gci_provider scm.acme.io)"
+check "prov-env-nomatch" ""   "$(GCI_GITLAB_HOSTS='other.com' gci_provider git.otainsight.com)"
 
 # gci_github_status — (status, conclusion) -> canonical status
 check "gh-success"   "success"  "$(gci_github_status completed success)"

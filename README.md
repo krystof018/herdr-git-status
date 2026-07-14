@@ -133,6 +133,14 @@ echo "GITLAB_CI_REFRESH=20" >> "$(herdr plugin config-dir gitlab-ci-status)/.env
 ```
 
 - `GITLAB_CI_REFRESH` — refresh interval in seconds (pane default `15`, poller default `30`).
+- `GCI_GITLAB_HOSTS` / `GCI_GITHUB_HOSTS` — space- or comma-separated hostnames to force to a
+  provider. Only needed for self-hosted instances whose domain has no `gitlab`/`github` in it
+  (e.g. `git.company.com`, `code.internal`); SaaS and `gitlab.<company>.com`-style hosts are
+  auto-detected. The matching CLI must already be authenticated for that host
+  (`glab auth login --hostname git.company.com`). Example:
+  ```sh
+  echo 'GCI_GITLAB_HOSTS=git.company.com' >> "$(herdr plugin config-dir gitlab-ci-status)/.env"
+  ```
 
 To change keybindings, edit the `[[keys.command]]` entries in your `config.toml` (see above). For pane
 placement, edit `herdr-plugin.toml` and re-link.
@@ -141,7 +149,8 @@ placement, edit `herdr-plugin.toml` and re-link.
 
 The `open` action reads the workspace's working directory from `HERDR_PLUGIN_CONTEXT_JSON`
 (`focused_pane_cwd`, falling back to `workspace_cwd`) and opens the `ci` pane there. The pane parses the
-`origin` remote, picks a provider from the host (`*gitlab*` → glab, `*github*` → gh), reads the current
+`origin` remote, picks a provider from the host (`*gitlab*` → glab, `*github*` → gh, or an explicit
+host from `GCI_GITLAB_HOSTS`/`GCI_GITHUB_HOSTS` for custom self-hosted domains), reads the current
 branch, and queries that provider for the latest CI run and the open MR/PR:
 
 - **GitLab:** `glab api "projects/<path>/pipelines?ref=<branch>"` (latest + a second call

@@ -58,8 +58,16 @@ gci_parse_remote() {
 gci_urlencode_path() { printf '%s\n' "${1//\//%2F}"; }
 
 # Map a remote host to a CI provider: "gitlab", "github", or "" (unsupported).
+# Self-hosted instances often use a custom domain with no "gitlab"/"github" in it
+# (git.company.com, code.internal, ...). List those hosts, space- or comma-separated,
+# in GCI_GITLAB_HOSTS / GCI_GITHUB_HOSTS to map them; substring detection is the
+# fallback for the SaaS hosts and the common gitlab.<company>.com pattern.
 gci_provider() {
-  case "$1" in
+  local h="$1"
+  local gl="${GCI_GITLAB_HOSTS:-}" gh="${GCI_GITHUB_HOSTS:-}"
+  case " ${gl//,/ } " in *" $h "*) printf 'gitlab'; return ;; esac
+  case " ${gh//,/ } " in *" $h "*) printf 'github'; return ;; esac
+  case "$h" in
     *gitlab*) printf 'gitlab' ;;
     *github*) printf 'github' ;;
     *)        printf '' ;;
