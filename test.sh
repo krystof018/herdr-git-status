@@ -136,6 +136,29 @@ check "gh-approved"      "approved" "$(gci_github_review_state false MERGEABLE A
 check "gh-awaiting"      "awaiting" "$(gci_github_review_state false MERGEABLE REVIEW_REQUIRED 0)"
 check "gh-unknown"       "awaiting" "$(gci_github_review_state false UNKNOWN '' 0)"
 check "gh-conflict-wins" "conflict" "$(gci_github_review_state true CONFLICTING CHANGES_REQUESTED 3)"
+# Re-requested review: pending request neutralizes the sticky reviewDecision and unresolved
+# threads (both outlive a re-request), but never a standing CHANGES_REQUESTED review.
+check "gh-rerequest"     "awaiting" "$(gci_github_review_state false MERGEABLE CHANGES_REQUESTED 2 0 1)"
+check "gh-rereq-thr"     "awaiting" "$(gci_github_review_state false MERGEABLE REVIEW_REQUIRED 2 0 1)"
+check "gh-standing-wins" "changes"  "$(gci_github_review_state false MERGEABLE CHANGES_REQUESTED 0 1 1)"
+check "gh-first-request" "awaiting" "$(gci_github_review_state false MERGEABLE REVIEW_REQUIRED 0 0 1)"
+# A pending request must never demote approved or draft, and a standing changes-request
+# must still beat draft (changes > draft precedence).
+check "gh-approved-pend"  "approved" "$(gci_github_review_state false MERGEABLE APPROVED 0 0 1)"
+check "gh-draft-pend"     "draft"    "$(gci_github_review_state true MERGEABLE CHANGES_REQUESTED 2 0 1)"
+check "gh-standing-draft" "changes"  "$(gci_github_review_state true MERGEABLE CHANGES_REQUESTED 0 1 0)"
+
+# gci_review_for_mr end to end against a canned GraphQL response: a gh() function shadows
+# the binary inside the command substitution. Pins the jq parse layer — isDraft:false must
+# not early-return (jq `//` treats false as falsy) — and the six-argument call order.
+gh() { printf '%s' "$GH_FIXTURE"; }
+GH_FIXTURE='{"data":{"repository":{"pullRequest":{"isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"CHANGES_REQUESTED","reviewThreads":{"nodes":[{"isResolved":false},{"isResolved":false}]},"reviewRequests":{"totalCount":1},"latestOpinionatedReviews":{"nodes":[]}}}}}'
+gci_review_for_mr "$DIR" myorg/app 1 github
+check "e2e-gh-rerequest" "awaiting" "$GCI_REVIEW"
+GH_FIXTURE='{"data":{"repository":{"pullRequest":{"isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"CHANGES_REQUESTED","reviewThreads":{"nodes":[]},"reviewRequests":{"totalCount":1},"latestOpinionatedReviews":{"nodes":[{"state":"CHANGES_REQUESTED"}]}}}}}'
+gci_review_for_mr "$DIR" myorg/app 1 github
+check "e2e-gh-standing" "changes" "$GCI_REVIEW"
+unset -f gh
 
 # gci_strip_ci_prefix with a review glyph on the MR token (review-state badge)
 check "strip-rev-ready"    "inventory"   "$(gci_strip_ci_prefix '🟢 ✅!250 inventory')"

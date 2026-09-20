@@ -199,10 +199,21 @@ gci_gitlab_review_state() {
 # matches the badge priority (conflict > changes > draft > approved > awaiting).
 # Args: <isDraft: true|false> <mergeable: MERGEABLE|CONFLICTING|UNKNOWN>
 #       <reviewDecision: APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED|''> <unresolved_threads: int>
+#       [standing_changes_reviews: int] [pending_review_requests: int]
 gci_github_review_state() {
-  local draft="$1" mergeable="$2" decision="$3" unresolved="${4:-0}"
+  local draft="$1" mergeable="$2" decision="$3" unresolved="${4:-0}" standing="${5:-0}" pending="${6:-0}"
   if [ "$mergeable" = "CONFLICTING" ]; then printf 'conflict'; return; fi
-  if [ "$decision" = "CHANGES_REQUESTED" ] || { [ "${unresolved:-0}" -gt 0 ] 2>/dev/null; }; then
+  # standing = CHANGES_REQUESTED entries in latestOpinionatedReviews; GitHub drops a reviewer
+  # from that list while their review is re-requested, so a standing entry always means
+  # changes. reviewDecision is sticky across a re-request and unresolved threads outlive
+  # pushed fixes, so both count only while no review is pending — a pending request puts the
+  # ball back in a reviewer's court: awaiting, not changes. NB: threads opened while some
+  # reviewer's never-consumed initial request is pending also read as awaiting; the
+  # projection can't tell fresh threads from stale ones without comparing timestamps, and
+  # the pending request is the stronger signal.
+  if [ "${standing:-0}" -gt 0 ] 2>/dev/null; then printf 'changes'; return; fi
+  if ! { [ "${pending:-0}" -gt 0 ] 2>/dev/null; } &&
+     { [ "$decision" = "CHANGES_REQUESTED" ] || [ "${unresolved:-0}" -gt 0 ] 2>/dev/null; }; then
     printf 'changes'; return
   fi
   if [ "$draft" = "true" ]; then printf 'draft'; return; fi
@@ -377,7 +388,7 @@ gci_open_pr() {
 # Args: repo path iid provider
 gci_review_for_mr() {
   local repo="$1" path="$2" iid="$3" provider="$4"
-  local enc resp dms blocking draft mergeable decision unresolved owner name
+  local enc resp dms blocking draft mergeable decision unresolved standing pending owner name
   GCI_REVIEW=""
   [ -n "$path" ] && [ -n "$iid" ] || return 0
   if [ "$provider" = "gitlab" ]; then
@@ -397,15 +408,20 @@ gci_review_for_mr() {
             mergeable
             reviewDecision
             reviewThreads(first:100){ nodes { isResolved } }
+            reviewRequests(first:1){ totalCount }
+            latestOpinionatedReviews(first:100){ nodes { state } }
           }
         }
       }' 2>/dev/null)" || return 0
-    draft="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.isDraft // empty' 2>/dev/null)"
+    # NB: `// empty` would erase isDraft:false (jq treats false as falsy); only bail on a missing PR.
+    draft="$(printf '%s' "$resp" | jq -r 'if .data.repository.pullRequest == null then empty else (.data.repository.pullRequest.isDraft|tostring) end' 2>/dev/null)"
     [ -n "$draft" ] || return 0
     mergeable="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.mergeable // "UNKNOWN"' 2>/dev/null)"
     decision="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewDecision // ""' 2>/dev/null)"
     unresolved="$(printf '%s' "$resp" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved==false)] | length' 2>/dev/null)"
-    GCI_REVIEW="$(gci_github_review_state "$draft" "$mergeable" "$decision" "${unresolved:-0}")"
+    standing="$(printf '%s' "$resp" | jq -r '[.data.repository.pullRequest.latestOpinionatedReviews.nodes[]? | select(.state=="CHANGES_REQUESTED")] | length' 2>/dev/null)"
+    pending="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewRequests.totalCount // 0' 2>/dev/null)"
+    GCI_REVIEW="$(gci_github_review_state "$draft" "$mergeable" "$decision" "${unresolved:-0}" "${standing:-0}" "${pending:-0}")"
   fi
   return 0
 }

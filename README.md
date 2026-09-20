@@ -54,7 +54,9 @@ In the sidebar, those spaces show as `🟢 !123 my-service` and `🟢 #123 web-a
 The open MR/PR number is also prefixed with a **review-state glyph** when the merge request
 needs attention or is ready: `💬` changes requested / unresolved threads · `⚠️` merge conflict
 (needs rebase) · `✅` approved & mergeable (ready to merge). Drafts and MRs merely awaiting
-review show the plain `!123` / `#123` with no glyph. So a space might read `🟢 ✅!123 my-service`
+review show the plain `!123` / `#123` with no glyph. On GitHub, re-requesting review after
+addressing feedback returns the PR to awaiting (no glyph) — stale threads and the old
+review decision don't keep it at `💬` while the ball is in a reviewer's court. So a space might read `🟢 ✅!123 my-service`
 (green pipeline, MR approved) or `🔴 💬!88 billing-api` (red pipeline, changes requested).
 
 ## Requirements
