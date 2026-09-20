@@ -110,14 +110,16 @@ gci_relative_time() {
   else printf '%dd ago\n' "$(( diff / 86400 ))"; fi
 }
 
-# CI status -> a single colored-dot emoji (for the spaces sidebar label).
+# CI status -> a single dot glyph (for the spaces sidebar label). Each glyph is
+# overridable via GITLAB_CI_ICON_* (.env or environment); a var that is set but
+# EMPTY hides the glyph — hence ${VAR-default}, not ${VAR:-default}.
 gci_status_emoji() {
   case "$1" in
-    success)  printf '🟢' ;;
-    failed)   printf '🔴' ;;
+    success)  printf '%s' "${GITLAB_CI_ICON_OK-🟢}" ;;
+    failed)   printf '%s' "${GITLAB_CI_ICON_FAIL-🔴}" ;;
     running|pending|created|preparing|waiting_for_resource|scheduled)
-              printf '🟡' ;;
-    *)        printf '⚪' ;;
+              printf '%s' "${GITLAB_CI_ICON_RUN-🟡}" ;;
+    *)        printf '%s' "${GITLAB_CI_ICON_NONE-⚪}" ;;
   esac
 }
 
@@ -145,13 +147,14 @@ gci_github_status() {
 
 # Canonical review state -> glyph (full vocabulary; used by the My-MRs pane and tests).
 # States: conflict | changes | draft | approved | awaiting | (anything else / "") -> "".
+# Overridable via GITLAB_CI_ICON_* like gci_status_emoji (set-but-empty hides).
 gci_review_glyph() {
   case "$1" in
-    conflict) printf '⚠️' ;;
-    changes)  printf '💬' ;;
-    draft)    printf '📝' ;;
-    approved) printf '✅' ;;
-    awaiting) printf '👀' ;;
+    conflict) printf '%s' "${GITLAB_CI_ICON_CONFLICT-⚠️}" ;;
+    changes)  printf '%s' "${GITLAB_CI_ICON_CHANGES-💬}" ;;
+    draft)    printf '%s' "${GITLAB_CI_ICON_DRAFT-📝}" ;;
+    approved) printf '%s' "${GITLAB_CI_ICON_APPROVED-✅}" ;;
+    awaiting) printf '%s' "${GITLAB_CI_ICON_AWAITING-👀}" ;;
     *)        printf '' ;;
   esac
 }
@@ -161,10 +164,8 @@ gci_review_glyph() {
 # as no glyph (plain !123 / #123).
 gci_review_badge_glyph() {
   case "$1" in
-    conflict) printf '⚠️' ;;
-    changes)  printf '💬' ;;
-    approved) printf '✅' ;;
-    *)        printf '' ;;
+    conflict|changes|approved) gci_review_glyph "$1" ;;
+    *)                         printf '' ;;
   esac
 }
 
@@ -218,14 +219,20 @@ gci_github_review_state() {
 # across re-applies and user renames. Both parts are optional, stripped independently.
 gci_strip_ci_prefix() {
   local rest="$1" e body num after
-  for e in '🟢' '🟡' '🔴' '⚪'; do
+  # Configured glyphs first, then the emoji defaults — so labels decorated before an
+  # icon-config change still strip instead of accumulating.
+  for e in "${GITLAB_CI_ICON_OK-}" "${GITLAB_CI_ICON_RUN-}" "${GITLAB_CI_ICON_FAIL-}" \
+           "${GITLAB_CI_ICON_NONE-}" '🟢' '🟡' '🔴' '⚪'; do
+    [ -n "$e" ] || continue      # an empty pattern would match anything
     if [ "${rest#"$e" }" != "$rest" ]; then rest="${rest#"$e" }"; break; fi
     if [ "${rest#"$e"}"  != "$rest" ]; then rest="${rest#"$e"}";  break; fi
   done
   # Optional review glyph glued to the MR sigil (e.g. "✅!123"). Only stripped when it is
   # immediately followed by a sigil+digit, so a user label that merely starts with one of
   # these emoji (e.g. "✅ done") is never clobbered.
-  for e in '⚠️' '💬' '📝' '✅' '👀'; do
+  for e in "${GITLAB_CI_ICON_CONFLICT-}" "${GITLAB_CI_ICON_CHANGES-}" "${GITLAB_CI_ICON_DRAFT-}" \
+           "${GITLAB_CI_ICON_APPROVED-}" "${GITLAB_CI_ICON_AWAITING-}" '⚠️' '💬' '📝' '✅' '👀'; do
+    [ -n "$e" ] || continue
     case "$rest" in
       "$e"'!'[0-9]*|"$e"'#'[0-9]*) rest="${rest#"$e"}"; break ;;
     esac

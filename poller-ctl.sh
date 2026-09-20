@@ -43,7 +43,7 @@ status_for_repo() {
       if [ -n "$GCI_STATUS" ]; then
         SPACE_EMOJI="$(gci_status_emoji "$GCI_STATUS")"
       else
-        SPACE_EMOJI="⚪"   # supported remote, but no pipeline/run for this branch
+        SPACE_EMOJI="$(gci_status_emoji '')"   # supported remote, but no pipeline/run for this branch
       fi
       if gci_open_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
         gci_review_for_mr "$cwd" "$GCI_PATH" "$GCI_MR_IID" "$GCI_PROVIDER"

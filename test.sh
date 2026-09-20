@@ -200,4 +200,31 @@ gci_daemon_alive "$dtmp"; check "daemon-empty"     "1" "$?"
 rm -f "$dtmp"                                        # missing pidfile -> not alive
 gci_daemon_alive "$dtmp"; check "daemon-nofile"    "1" "$?"
 
+# Configurable icons — GITLAB_CI_ICON_* overrides (defaults are pinned by the em-*/rg-*/rb-*
+# checks above, which run with all icon vars unset).
+check "ov-ok"         "X" "$(GITLAB_CI_ICON_OK=X gci_status_emoji success)"
+check "ov-fail"       "F" "$(GITLAB_CI_ICON_FAIL=F gci_status_emoji failed)"
+check "ov-run"        "R" "$(GITLAB_CI_ICON_RUN=R gci_status_emoji pending)"
+check "ov-none"       "N" "$(GITLAB_CI_ICON_NONE=N gci_status_emoji canceled)"
+check "ov-approved"   "A" "$(GITLAB_CI_ICON_APPROVED=A gci_review_glyph approved)"
+check "ov-draft"      "D" "$(GITLAB_CI_ICON_DRAFT=D gci_review_glyph draft)"
+check "ov-badge"      "C" "$(GITLAB_CI_ICON_CONFLICT=C gci_review_badge_glyph conflict)"
+check "ov-badge-drft" ""  "$(GITLAB_CI_ICON_DRAFT=D gci_review_badge_glyph draft)"
+# Set-but-EMPTY hides the glyph (e.g. no dot for "no pipeline"):
+check "ov-none-empty" ""  "$(GITLAB_CI_ICON_NONE= gci_status_emoji canceled)"
+
+# Strip round-trip with overrides: label built the way poll_once builds it.
+check "ov-strip-roundtrip" "dbt" "$(
+  GITLAB_CI_ICON_OK=✔ GITLAB_CI_ICON_APPROVED=A
+  gci_strip_ci_prefix "$(gci_status_emoji success) $(gci_review_badge_glyph approved)!12 dbt"
+)"
+# The default emoji must STILL strip while overrides are active, or labels decorated
+# before an icon-config change accumulate prefixes on the first poll after it:
+check "ov-strip-default"   "dbt" "$(GITLAB_CI_ICON_OK=✔ gci_strip_ci_prefix '🟢 dbt')"
+# Empty round-trip: no dot emitted, MR token still stripped:
+check "ov-empty-roundtrip" "svc" "$(GITLAB_CI_ICON_NONE= gci_strip_ci_prefix "$(gci_status_emoji unknown)!123 svc")"
+# Empty-override guard: an empty pattern must be skipped by strip ("" matches anything —
+# here it would eat the leading space of the label):
+check "ov-empty-strip"     " x"  "$(GITLAB_CI_ICON_NONE= gci_strip_ci_prefix ' x')"
+
 exit $fail

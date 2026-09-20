@@ -133,6 +133,23 @@ echo "GITLAB_CI_REFRESH=20" >> "$(herdr plugin config-dir gitlab-ci-status)/.env
 ```
 
 - `GITLAB_CI_REFRESH` — refresh interval in seconds (pane default `15`, poller default `30`).
+- `GITLAB_CI_ICON_OK` / `_FAIL` / `_RUN` / `_NONE` — sidebar CI dot per state
+  (defaults `🟢` `🔴` `🟡` `⚪`). Set a var to *empty* to hide that dot, e.g.
+  `GITLAB_CI_ICON_NONE=` shows nothing when a branch has no pipeline.
+- `GITLAB_CI_ICON_CONFLICT` / `_CHANGES` / `_APPROVED` / `_DRAFT` / `_AWAITING` — review-state
+  glyphs (defaults `⚠️` `💬` `✅` `📝` `👀`). The sidebar badge only ever shows
+  conflict/changes/approved; draft/awaiting appear in the My MRs pane.
+
+Example — monochrome Nerd Font icons instead of emoji (needs a Nerd-patched terminal font,
+otherwise these render as tofu boxes):
+
+```sh
+# nf-fa-check U+F00C · nf-fa-times U+F00D · nf-fa-circle U+F111
+#GITLAB_CI_ICON_OK=
+#GITLAB_CI_ICON_FAIL=
+#GITLAB_CI_ICON_RUN=
+#GITLAB_CI_ICON_NONE=          # empty = no dot for "no pipeline"
+```
 
 To change keybindings, edit the `[[keys.command]]` entries in your `config.toml` (see above). For pane
 placement, edit `herdr-plugin.toml` and re-link.
