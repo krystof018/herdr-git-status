@@ -48,7 +48,8 @@ status_for_repo() {
       if gci_open_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
         gci_review_for_mr "$cwd" "$GCI_PATH" "$GCI_MR_IID" "$GCI_PROVIDER"
         glyph="$(gci_review_badge_glyph "$GCI_REVIEW")"
-        SPACE_MR="$glyph$GCI_MR_SIGIL$GCI_MR_IID"
+        SPACE_MR="$GCI_MR_SIGIL$GCI_MR_IID"
+        [ -n "$glyph" ] && SPACE_MR="$glyph $SPACE_MR"   # "✅ #123", plain "#123" with no glyph
       fi
       ;;
   esac
