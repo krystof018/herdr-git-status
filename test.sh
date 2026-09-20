@@ -185,6 +185,22 @@ pick_none='{"panes":[{"workspace_id":"wB","cwd":"'"$pt/plug"'"},{"workspace_id":
 check "cwd-git-fallback" "$pt/plug" "$(gci_pick_pane_cwd wB "$pick_none")"
 # Unknown workspace -> empty:
 check "cwd-git-none"     ""         "$(gci_pick_pane_cwd wZ "$pick_json")"
+# An installed plugin's own checkout (cwd under the herdr plugins root) HAS an origin remote,
+# so the origin heuristic alone can't reject it — it must be skipped by path, and must never
+# shadow the real repo pane nor serve as the fallback:
+mkdir -p "$pt/plugins/github"
+git -C "$pt/plugins/github" init -q
+git -C "$pt/plugins/github" remote add origin https://github.com/x/some-plugin.git
+pick_plug='{"result":{"panes":[
+  {"workspace_id":"wC","foreground_cwd":"'"$pt/plugins/github"'"},
+  {"workspace_id":"wC","foreground_cwd":"'"$pt/repo"'"}
+]}}'
+check "cwd-skip-plugin" "$pt/repo" "$(GCI_PLUGINS_ROOT="$pt/plugins" gci_pick_pane_cwd wC "$pick_plug")"
+pick_plug_only='{"panes":[
+  {"workspace_id":"wD","cwd":"'"$pt/plugins/github"'"},
+  {"workspace_id":"wD","cwd":"'"$pt/plain"'"}
+]}'
+check "cwd-plugin-fallback" "$pt/plain" "$(GCI_PLUGINS_ROOT="$pt/plugins" gci_pick_pane_cwd wD "$pick_plug_only")"
 rm -rf "$pt"
 
 # gci_daemon_alive — true only when <pidfile> exists and names a live process. Backs the

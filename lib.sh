@@ -261,13 +261,17 @@ gci_git_has_origin() {
 # Choose the cwd that represents a workspace's repo from a `herdr pane list` JSON blob.
 # Prefer the first pane whose cwd is a git repo WITH an origin remote (the real project
 # checkout). This skips panes like the status bar, whose cwd is a remote-less git dir and
-# would otherwise shadow the repo and drop the CI dot from every space that has a bar. Falls
-# back to the first pane of the workspace when none qualifies.
+# would otherwise shadow the repo and drop the CI dot from every space that has a bar. Panes
+# whose cwd lives under the herdr plugins dir are ignored outright: an installed plugin's own
+# checkout is a git repo WITH an origin remote, so the origin heuristic alone can't tell it
+# from the project repo. Falls back to the first non-plugin pane when none qualifies.
 # Args: <workspace_id> <pane_list_json>. Echoes the cwd, or nothing.
 gci_pick_pane_cwd() {
   local wsid="$1" panes_json="$2" cwd first=""
+  local plugroot="${GCI_PLUGINS_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins}"
   while IFS= read -r cwd; do
     [ -n "$cwd" ] || continue
+    case "$cwd" in "$plugroot"|"$plugroot"/*) continue ;; esac
     [ -n "$first" ] || first="$cwd"
     if gci_git_has_origin "$cwd"; then printf '%s\n' "$cwd"; return 0; fi
   done < <(gci_pane_cwds "$wsid" "$panes_json")
