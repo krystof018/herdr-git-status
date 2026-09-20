@@ -110,14 +110,16 @@ gci_relative_time() {
   else printf '%dd ago\n' "$(( diff / 86400 ))"; fi
 }
 
-# CI status -> a single colored-dot emoji (for the spaces sidebar label).
+# CI status -> a single dot glyph (for the spaces sidebar label). Each glyph is
+# overridable via GITLAB_CI_ICON_* (.env or environment); a var that is set but
+# EMPTY hides the glyph — hence ${VAR-default}, not ${VAR:-default}.
 gci_status_emoji() {
   case "$1" in
-    success)  printf '🟢' ;;
-    failed)   printf '🔴' ;;
+    success)  printf '%s' "${GITLAB_CI_ICON_OK-🟢}" ;;
+    failed)   printf '%s' "${GITLAB_CI_ICON_FAIL-🔴}" ;;
     running|pending|created|preparing|waiting_for_resource|scheduled)
-              printf '🟡' ;;
-    *)        printf '⚪' ;;
+              printf '%s' "${GITLAB_CI_ICON_RUN-🟡}" ;;
+    *)        printf '%s' "${GITLAB_CI_ICON_NONE-⚪}" ;;
   esac
 }
 
@@ -143,15 +145,41 @@ gci_github_status() {
   esac
 }
 
+# Aggregate a head commit's GitHub check runs into one overall status. A push can trigger
+# many workflows (some skip-conditioned), so sampling a single run misreports CI; the PR
+# page aggregates all check runs, and so do we: the highest-severity canonical status wins
+# (failed > running > pending > manual > canceled > success > unknown > skipped). Reads
+# "status \t conclusion \t id \t url \t updated" lines; prints the winning run as
+# "canonical \t id \t url \t updated", or nothing on empty input.
+gci_github_checks_status() {
+  # NB: split manually — tab is IFS whitespace, so `read` would collapse the empty
+  # conclusion field of a non-completed run and shift the remaining columns.
+  local line st cc rest s p best="" bp=-1 tab=$'\t'
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    st="${line%%"$tab"*}"; rest="${line#*"$tab"}"
+    cc="${rest%%"$tab"*}"; rest="${rest#*"$tab"}"
+    s="$(gci_github_status "$st" "$cc")"
+    case "$s" in
+      failed) p=7 ;; running) p=6 ;; pending) p=5 ;; manual) p=4 ;;
+      canceled) p=3 ;; success) p=2 ;; unknown) p=1 ;; *) p=0 ;;
+    esac
+    if [ "$p" -gt "$bp" ]; then bp=$p; best="$s$tab$rest"; fi
+  done
+  printf '%s' "$best"
+}
+
 # Canonical review state -> glyph (full vocabulary; used by the My-MRs pane and tests).
-# States: conflict | changes | draft | approved | awaiting | (anything else / "") -> "".
+# States: conflict | changes | draft | approved | awaiting | merged | (anything else / "") -> "".
+# Overridable via GITLAB_CI_ICON_* like gci_status_emoji (set-but-empty hides).
 gci_review_glyph() {
   case "$1" in
-    conflict) printf '⚠️' ;;
-    changes)  printf '💬' ;;
-    draft)    printf '📝' ;;
-    approved) printf '✅' ;;
-    awaiting) printf '👀' ;;
+    conflict) printf '%s' "${GITLAB_CI_ICON_CONFLICT-⚠️}" ;;
+    changes)  printf '%s' "${GITLAB_CI_ICON_CHANGES-💬}" ;;
+    draft)    printf '%s' "${GITLAB_CI_ICON_DRAFT-📝}" ;;
+    approved) printf '%s' "${GITLAB_CI_ICON_APPROVED-✅}" ;;
+    awaiting) printf '%s' "${GITLAB_CI_ICON_AWAITING-👀}" ;;
+    merged)   printf '%s' "${GITLAB_CI_ICON_MERGED-🔀}" ;;
     *)        printf '' ;;
   esac
 }
@@ -161,10 +189,8 @@ gci_review_glyph() {
 # as no glyph (plain !123 / #123).
 gci_review_badge_glyph() {
   case "$1" in
-    conflict) printf '⚠️' ;;
-    changes)  printf '💬' ;;
-    approved) printf '✅' ;;
-    *)        printf '' ;;
+    conflict|changes|approved|merged) gci_review_glyph "$1" ;;
+    *)                                printf '' ;;
   esac
 }
 
@@ -195,14 +221,33 @@ gci_gitlab_review_state() {
   esac
 }
 
+# blocking_discussions_resolved from a GitLab MR JSON blob, as "true"/"false". Missing or
+# null still defaults to "true", but a real false must survive — jq's `//` treats false as
+# falsy and would erase it, so the 'changes' fallback above could never fire.
+# Args: <mr_json>
+gci_gitlab_blocking_resolved() {
+  printf '%s' "$1" | jq -r '.blocking_discussions_resolved | if . == null then "true" else tostring end' 2>/dev/null
+}
+
 # GitHub PR -> canonical review state, from a GraphQL pull-request projection. Precedence
 # matches the badge priority (conflict > changes > draft > approved > awaiting).
 # Args: <isDraft: true|false> <mergeable: MERGEABLE|CONFLICTING|UNKNOWN>
 #       <reviewDecision: APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED|''> <unresolved_threads: int>
+#       [standing_changes_reviews: int] [pending_review_requests: int]
 gci_github_review_state() {
-  local draft="$1" mergeable="$2" decision="$3" unresolved="${4:-0}"
+  local draft="$1" mergeable="$2" decision="$3" unresolved="${4:-0}" standing="${5:-0}" pending="${6:-0}"
   if [ "$mergeable" = "CONFLICTING" ]; then printf 'conflict'; return; fi
-  if [ "$decision" = "CHANGES_REQUESTED" ] || { [ "${unresolved:-0}" -gt 0 ] 2>/dev/null; }; then
+  # standing = CHANGES_REQUESTED entries in latestOpinionatedReviews; GitHub drops a reviewer
+  # from that list while their review is re-requested, so a standing entry always means
+  # changes. reviewDecision is sticky across a re-request and unresolved threads outlive
+  # pushed fixes, so both count only while no review is pending — a pending request puts the
+  # ball back in a reviewer's court: awaiting, not changes. NB: threads opened while some
+  # reviewer's never-consumed initial request is pending also read as awaiting; the
+  # projection can't tell fresh threads from stale ones without comparing timestamps, and
+  # the pending request is the stronger signal.
+  if [ "${standing:-0}" -gt 0 ] 2>/dev/null; then printf 'changes'; return; fi
+  if ! { [ "${pending:-0}" -gt 0 ] 2>/dev/null; } &&
+     { [ "$decision" = "CHANGES_REQUESTED" ] || [ "${unresolved:-0}" -gt 0 ] 2>/dev/null; }; then
     printf 'changes'; return
   fi
   if [ "$draft" = "true" ]; then printf 'draft'; return; fi
@@ -218,16 +263,25 @@ gci_github_review_state() {
 # across re-applies and user renames. Both parts are optional, stripped independently.
 gci_strip_ci_prefix() {
   local rest="$1" e body num after
-  for e in '🟢' '🟡' '🔴' '⚪'; do
+  # Configured glyphs first, then the emoji defaults — so labels decorated before an
+  # icon-config change still strip instead of accumulating.
+  for e in "${GITLAB_CI_ICON_OK-}" "${GITLAB_CI_ICON_RUN-}" "${GITLAB_CI_ICON_FAIL-}" \
+           "${GITLAB_CI_ICON_NONE-}" '🟢' '🟡' '🔴' '⚪'; do
+    [ -n "$e" ] || continue      # an empty pattern would match anything
     if [ "${rest#"$e" }" != "$rest" ]; then rest="${rest#"$e" }"; break; fi
     if [ "${rest#"$e"}"  != "$rest" ]; then rest="${rest#"$e"}";  break; fi
   done
-  # Optional review glyph glued to the MR sigil (e.g. "✅!123"). Only stripped when it is
-  # immediately followed by a sigil+digit, so a user label that merely starts with one of
-  # these emoji (e.g. "✅ done") is never clobbered.
-  for e in '⚠️' '💬' '📝' '✅' '👀'; do
+  # Optional review glyph before the MR sigil, either glued ("✅#123") or space-separated
+  # ("✅ #123", how the poller emits it). Only stripped when a sigil+digit follows, so a
+  # user label that merely starts with one of these emoji (e.g. "✅ done") is never clobbered.
+  # The trailing "#123 " token is then removed by the sigil case below in both forms.
+  for e in "${GITLAB_CI_ICON_CONFLICT-}" "${GITLAB_CI_ICON_CHANGES-}" "${GITLAB_CI_ICON_DRAFT-}" \
+           "${GITLAB_CI_ICON_APPROVED-}" "${GITLAB_CI_ICON_AWAITING-}" "${GITLAB_CI_ICON_MERGED-}" \
+           '⚠️' '💬' '📝' '✅' '👀' '🔀'; do
+    [ -n "$e" ] || continue
     case "$rest" in
-      "$e"'!'[0-9]*|"$e"'#'[0-9]*) rest="${rest#"$e"}"; break ;;
+      "$e"'!'[0-9]*|"$e"'#'[0-9]*)   rest="${rest#"$e"}";  break ;;
+      "$e"' !'[0-9]*|"$e"' #'[0-9]*) rest="${rest#"$e" }"; break ;;
     esac
   done
   case "$rest" in
@@ -261,27 +315,40 @@ gci_git_has_origin() {
 # Choose the cwd that represents a workspace's repo from a `herdr pane list` JSON blob.
 # Prefer the first pane whose cwd is a git repo WITH an origin remote (the real project
 # checkout). This skips panes like the status bar, whose cwd is a remote-less git dir and
-# would otherwise shadow the repo and drop the CI dot from every space that has a bar. Falls
-# back to the first pane of the workspace when none qualifies.
+# would otherwise shadow the repo and drop the CI dot from every space that has a bar. Panes
+# whose cwd lives under the herdr plugins dir are ignored outright: an installed plugin's own
+# checkout is a git repo WITH an origin remote, so the origin heuristic alone can't tell it
+# from the project repo. Falls back to the first non-plugin pane when none qualifies.
 # Args: <workspace_id> <pane_list_json>. Echoes the cwd, or nothing.
 gci_pick_pane_cwd() {
   local wsid="$1" panes_json="$2" cwd first=""
+  local plugroot="${GCI_PLUGINS_ROOT:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins}"
   while IFS= read -r cwd; do
     [ -n "$cwd" ] || continue
+    case "$cwd" in "$plugroot"|"$plugroot"/*) continue ;; esac
     [ -n "$first" ] || first="$cwd"
     if gci_git_has_origin "$cwd"; then printf '%s\n' "$cwd"; return 0; fi
   done < <(gci_pane_cwds "$wsid" "$panes_json")
   [ -n "$first" ] && printf '%s\n' "$first"
 }
 
+# gci_pid_matches <pid> <pattern> — true when <pid> is alive AND its command line
+# contains <pattern> (fixed string). Guards every pidfile consumer against pid
+# reuse after a reboot: kill -0 alone cannot tell our daemon from a stranger.
+gci_pid_matches() {
+  ps -p "$1" -o command= 2>/dev/null | grep -qF "$2"
+}
+
 # True (exit 0) only when <pidfile> exists and names a live process. Backs the poller's
 # is_running check and its self-healing `start`, which relaunches whenever this is false.
 gci_daemon_alive() {
-  local pidfile="$1" pid
+  local pidfile="$1" pattern="${2:-}" pid
   [ -f "$pidfile" ] || return 1
   pid="$(cat "$pidfile" 2>/dev/null)"
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" 2>/dev/null
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -z "$pattern" ] && return 0
+  gci_pid_matches "$pid" "$pattern"
 }
 
 # Emit <text> as an OSC 8 terminal hyperlink to <url> (Ctrl/Cmd-clickable in modern
@@ -294,24 +361,42 @@ gci_hyperlink() {
   printf '\033]8;;%s\a%s\033]8;;\a' "$url" "$text"
 }
 
+# Fork checkouts: print the `upstream` remote's path when one exists on the SAME host
+# as origin (so provider and CLI auth context carry over); print nothing otherwise.
+# Pure git-config read — no network. Forks without an `upstream` remote could fall back
+# to the forge API (gh repo view --json parent / GitLab forked_from_project) — YAGNI
+# until such a checkout shows up.
+gci_upstream_path() {
+  local repo="$1" ourl uurl op upp
+  ourl="$(git -C "$repo" remote get-url origin 2>/dev/null)" || return 0
+  uurl="$(git -C "$repo" remote get-url upstream 2>/dev/null)" || return 0
+  op="$(gci_parse_remote "$ourl" 2>/dev/null)" || return 0
+  upp="$(gci_parse_remote "$uurl" 2>/dev/null)" || return 0
+  [ "${op%%$'\t'*}" = "${upp%%$'\t'*}" ] || return 0
+  printf '%s\n' "${upp#*$'\t'}"
+}
+
 # Resolve a repo's latest CI state for its current branch, dispatching on the remote
 # provider (GitLab pipelines via glab, GitHub Actions runs via gh). Returns everything
 # via globals (NOT stdout) so it can be called without a subshell:
 #   GCI_HOST, GCI_PATH, GCI_BRANCH, GCI_PROVIDER, GCI_ERR (on error),
 #   GCI_STATUS  canonical status (success/failed/running/pending/canceled/skipped/
 #               manual/unknown), or "" when the branch has no pipeline/run,
-#   GCI_CI_ID, GCI_CI_URL, GCI_CI_UPDATED.
+#   GCI_CI_ID, GCI_CI_URL, GCI_CI_UPDATED,
+#   GCI_CI_PATH the repo slug the run was actually found in — fork→upstream PRs run CI
+#               in the base repo (defaults to GCI_PATH); pass THIS to gci_failed_ci.
 # Return codes:
 #   0 ok | 1 not-a-git-repo | 2 no-origin | 3 remote-not-parseable
 #   4 unsupported-host (not GitLab/GitHub) | 5 api-error (incl. missing provider CLI)
 gci_latest_ci() {
-  local repo="$1" url parsed enc resp run st cc
+  local repo="$1" url parsed enc resp run up
   GCI_HOST=""; GCI_PATH=""; GCI_BRANCH=""; GCI_PROVIDER=""; GCI_ERR=""
-  GCI_STATUS=""; GCI_CI_ID=""; GCI_CI_URL=""; GCI_CI_UPDATED=""
+  GCI_STATUS=""; GCI_CI_ID=""; GCI_CI_URL=""; GCI_CI_UPDATED=""; GCI_CI_PATH=""
   git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
   url="$(git -C "$repo" remote get-url origin 2>/dev/null)" || return 2
   parsed="$(gci_parse_remote "$url")" || return 3
   GCI_HOST="${parsed%%$'\t'*}"; GCI_PATH="${parsed#*$'\t'}"
+  GCI_CI_PATH="$GCI_PATH"
   GCI_PROVIDER="$(gci_provider "$GCI_HOST")"
   [ -n "$GCI_PROVIDER" ] || return 4
   GCI_BRANCH="$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)"
@@ -321,6 +406,14 @@ gci_latest_ci() {
     enc="$(gci_urlencode_path "$GCI_PATH")"
     resp="$(cd "$repo" && glab api "projects/$enc/pipelines?ref=$GCI_BRANCH&per_page=1" 2>&1)" || { GCI_ERR="$resp"; return 5; }
     run="$(printf '%s' "$resp" | jq -c '.[0] // empty' 2>/dev/null)"
+    # Fork→upstream MRs may run their pipelines in the target project; on no-hit, retry
+    # the upstream slug (retry errors are treated as "no pipeline" — origin already answered).
+    if [ -z "$run" ] && up="$(gci_upstream_path "$repo")" && [ -n "$up" ] && [ "$up" != "$GCI_PATH" ]; then
+      enc="$(gci_urlencode_path "$up")"
+      resp="$(cd "$repo" && glab api "projects/$enc/pipelines?ref=$GCI_BRANCH&per_page=1" 2>/dev/null)" \
+        && run="$(printf '%s' "$resp" | jq -c '.[0] // empty' 2>/dev/null)" \
+        && [ -n "$run" ] && GCI_CI_PATH="$up" || true
+    fi
     [ -n "$run" ] || return 0
     GCI_STATUS="$(printf '%s' "$run" | jq -r '.status // "unknown"')"
     GCI_CI_ID="$(printf '%s' "$run" | jq -r '.id // empty')"
@@ -328,44 +421,130 @@ gci_latest_ci() {
     GCI_CI_UPDATED="$(printf '%s' "$run" | jq -r '.updated_at // empty')"
   else
     command -v gh >/dev/null 2>&1 || { GCI_ERR="gh not found — install it (brew install gh) and run: gh auth login"; return 5; }
-    resp="$(cd "$repo" && gh api "repos/$GCI_PATH/actions/runs?branch=$GCI_BRANCH&per_page=1" 2>&1)" || { GCI_ERR="$resp"; return 5; }
-    run="$(printf '%s' "$resp" | jq -c '.workflow_runs[0] // empty' 2>/dev/null)"
+    # Aggregate ALL check runs on the branch head (what the PR page shows) — a push can
+    # trigger several workflows, and sampling one run (e.g. a skip-conditioned workflow)
+    # misreports CI that is actually green/running. The winning run supplies id/url/updated.
+    enc="$(gci_urlencode_path "$GCI_BRANCH")"
+    if ! resp="$(cd "$repo" && gh api "repos/$GCI_PATH/commits/$enc/check-runs?per_page=100" 2>&1)"; then
+      # A branch that isn't on the remote (yet, or anymore) simply has no CI to report.
+      # This endpoint answers 422 "No commit found for SHA" for an unresolvable ref (404
+      # only covers a missing repo), and merged branches are typically auto-deleted.
+      case "$resp" in *"HTTP 404"*|*"HTTP 422"*) return 0 ;; esac
+      GCI_ERR="$resp"; return 5
+    fi
+    run="$(printf '%s' "$resp" \
+      | jq -r '.check_runs[]? | [.status, .conclusion // "", (.id|tostring), .html_url // "", (.completed_at // .started_at // "")] | @tsv' 2>/dev/null \
+      | gci_github_checks_status)"
+    # Fork PRs' `pull_request` check runs attach to the head commit in the BASE repo; on
+    # no-hit, retry the upstream slug (retry errors = "no run" — origin already answered).
+    if [ -z "$run" ] && up="$(gci_upstream_path "$repo")" && [ -n "$up" ] && [ "$up" != "$GCI_PATH" ]; then
+      resp="$(cd "$repo" && gh api "repos/$up/commits/$enc/check-runs?per_page=100" 2>/dev/null)" \
+        && run="$(printf '%s' "$resp" \
+          | jq -r '.check_runs[]? | [.status, .conclusion // "", (.id|tostring), .html_url // "", (.completed_at // .started_at // "")] | @tsv' 2>/dev/null \
+          | gci_github_checks_status)" \
+        && [ -n "$run" ] && GCI_CI_PATH="$up" || true
+    fi
     [ -n "$run" ] || return 0
-    st="$(printf '%s' "$run" | jq -r '.status // "unknown"')"
-    cc="$(printf '%s' "$run" | jq -r '.conclusion // empty')"
-    GCI_STATUS="$(gci_github_status "$st" "$cc")"
-    GCI_CI_ID="$(printf '%s' "$run" | jq -r '.id // empty')"
-    GCI_CI_URL="$(printf '%s' "$run" | jq -r '.html_url // empty')"
-    GCI_CI_UPDATED="$(printf '%s' "$run" | jq -r '.updated_at // empty')"
+    IFS=$'\t' read -r GCI_STATUS GCI_CI_ID GCI_CI_URL GCI_CI_UPDATED <<<"$run"
   fi
   return 0
 }
 
 # Look up the open MR/PR whose source/head branch is <branch>, dispatching on
 # <provider> ("gitlab"|"github"). Sets globals (NOT stdout): GCI_MR_IID, GCI_MR_URL,
-# and GCI_MR_SIGIL ("!" for GitLab, "#" for GitHub) — all "" on error/none. The args
-# come from a prior gci_latest_ci call; <repo> supplies the CLI's host + auth context.
+# GCI_MR_SIGIL ("!" for GitLab, "#" for GitHub), and GCI_MR_PATH — the repo slug the
+# MR/PR was actually found in (fork→upstream PRs live in the upstream repo; pass THIS
+# to gci_review_for_mr) — all "" on error/none. The args come from a prior
+# gci_latest_ci call; <repo> supplies the CLI's host + auth context.
 # Return: 0 found | 1 missing args | 2 api-error | 3 no open MR/PR.
 gci_open_pr() {
-  local repo="$1" path="$2" branch="$3" provider="$4" enc resp owner
-  GCI_MR_IID=""; GCI_MR_URL=""; GCI_MR_SIGIL=""
+  local repo="$1" path="$2" branch="$3" provider="$4" enc resp owner up
+  GCI_MR_IID=""; GCI_MR_URL=""; GCI_MR_SIGIL=""; GCI_MR_PATH=""
   [ -n "$path" ] && [ -n "$branch" ] || return 1
+  GCI_MR_PATH="$path"
   if [ "$provider" = "gitlab" ]; then
     GCI_MR_SIGIL="!"
     enc="$(gci_urlencode_path "$path")"
     resp="$(cd "$repo" && glab api "projects/$enc/merge_requests?source_branch=$branch&state=opened&per_page=1" 2>/dev/null)" || return 2
     GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].iid // empty' 2>/dev/null)"
     GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].web_url // empty' 2>/dev/null)"
+    # Fork→upstream MRs exist only in the TARGET project; on no-hit, retry the upstream slug.
+    if [ -z "$GCI_MR_IID" ] && up="$(gci_upstream_path "$repo")" && [ -n "$up" ] && [ "$up" != "$path" ]; then
+      enc="$(gci_urlencode_path "$up")"
+      resp="$(cd "$repo" && glab api "projects/$enc/merge_requests?source_branch=$branch&state=opened&per_page=1" 2>/dev/null)" \
+        && GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].iid // empty' 2>/dev/null)" \
+        && GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].web_url // empty' 2>/dev/null)" \
+        && GCI_MR_PATH="$up" || true
+    fi
   elif [ "$provider" = "github" ]; then
     GCI_MR_SIGIL="#"
     owner="${path%%/*}"
     resp="$(cd "$repo" && gh api "repos/$path/pulls?head=$owner:$branch&state=open&per_page=1" 2>/dev/null)" || return 2
     GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].number // empty' 2>/dev/null)"
     GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].html_url // empty' 2>/dev/null)"
+    # Fork→upstream PRs exist only in the BASE repo; on no-hit, retry the upstream slug
+    # with the same fork-qualified head filter (<fork_owner>:<branch>).
+    if [ -z "$GCI_MR_IID" ] && up="$(gci_upstream_path "$repo")" && [ -n "$up" ] && [ "$up" != "$path" ]; then
+      resp="$(cd "$repo" && gh api "repos/$up/pulls?head=$owner:$branch&state=open&per_page=1" 2>/dev/null)" \
+        && GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].number // empty' 2>/dev/null)" \
+        && GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].html_url // empty' 2>/dev/null)" \
+        && GCI_MR_PATH="$up" || true
+    fi
   else
     return 1
   fi
-  [ -n "$GCI_MR_IID" ] || { GCI_MR_IID=""; GCI_MR_URL=""; return 3; }
+  [ -n "$GCI_MR_IID" ] || { GCI_MR_IID=""; GCI_MR_URL=""; GCI_MR_PATH=""; return 3; }
+  return 0
+}
+
+# Look up the MERGED MR/PR whose source/head branch is <branch>, so a positive "merged" badge
+# can replace the open-PR token once gci_open_pr reports none. Same shape as gci_open_pr: sets
+# globals (NOT stdout) GCI_MR_IID, GCI_MR_URL, GCI_MR_SIGIL ("!" GitLab / "#" GitHub) — all ""
+# on none/error — plus GCI_REVIEW="merged" on success. GitHub's state=closed returns closed
+# OR merged PRs, so merged is gated on `.merged_at != null`; GitLab's state=merged is already
+# merged-only. Return: 0 merged | 1 missing args | 2 api-error | 3 not merged.
+gci_merged_pr() {
+  local repo="$1" path="$2" branch="$3" provider="$4" enc resp owner up
+  GCI_MR_IID=""; GCI_MR_URL=""; GCI_MR_SIGIL=""; GCI_MR_PATH=""; GCI_REVIEW=""
+  [ -n "$path" ] && [ -n "$branch" ] || return 1
+  GCI_MR_PATH="$path"
+  if [ "$provider" = "gitlab" ]; then
+    GCI_MR_SIGIL="!"
+    enc="$(gci_urlencode_path "$path")"
+    resp="$(cd "$repo" && glab api "projects/$enc/merge_requests?source_branch=$branch&state=merged&per_page=1" 2>/dev/null)" || return 2
+    GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].iid // empty' 2>/dev/null)"
+    GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].web_url // empty' 2>/dev/null)"
+    # Fork→upstream MRs merge in the TARGET project; on no-hit, retry the upstream slug.
+    if [ -z "$GCI_MR_IID" ] && up="$(gci_upstream_path "$repo")" && [ -n "$up" ] && [ "$up" != "$path" ]; then
+      enc="$(gci_urlencode_path "$up")"
+      resp="$(cd "$repo" && glab api "projects/$enc/merge_requests?source_branch=$branch&state=merged&per_page=1" 2>/dev/null)" \
+        && GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].iid // empty' 2>/dev/null)" \
+        && GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].web_url // empty' 2>/dev/null)" \
+        && [ -n "$GCI_MR_IID" ] && GCI_MR_PATH="$up" || true
+    fi
+  elif [ "$provider" = "github" ]; then
+    GCI_MR_SIGIL="#"
+    owner="${path%%/*}"
+    resp="$(cd "$repo" && gh api "repos/$path/pulls?head=$owner:$branch&state=closed&per_page=1" 2>/dev/null)" || return 2
+    if [ -n "$(printf '%s' "$resp" | jq -r '.[0].merged_at // empty' 2>/dev/null)" ]; then
+      GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].number // empty' 2>/dev/null)"
+      GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].html_url // empty' 2>/dev/null)"
+    fi
+    # Fork→upstream PRs merge in the BASE repo; on no-hit, retry the upstream slug with the
+    # same fork-qualified head filter (<fork_owner>:<branch>), still gated on .merged_at.
+    if [ -z "$GCI_MR_IID" ] && up="$(gci_upstream_path "$repo")" && [ -n "$up" ] && [ "$up" != "$path" ]; then
+      resp="$(cd "$repo" && gh api "repos/$up/pulls?head=$owner:$branch&state=closed&per_page=1" 2>/dev/null)" || resp=""
+      if [ -n "$(printf '%s' "$resp" | jq -r '.[0].merged_at // empty' 2>/dev/null)" ]; then
+        GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].number // empty' 2>/dev/null)"
+        GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].html_url // empty' 2>/dev/null)"
+        [ -n "$GCI_MR_IID" ] && GCI_MR_PATH="$up"
+      fi
+    fi
+  else
+    return 1
+  fi
+  [ -n "$GCI_MR_IID" ] || { GCI_MR_IID=""; GCI_MR_URL=""; GCI_MR_PATH=""; return 3; }
+  GCI_REVIEW="merged"
   return 0
 }
 
@@ -377,7 +556,7 @@ gci_open_pr() {
 # Args: repo path iid provider
 gci_review_for_mr() {
   local repo="$1" path="$2" iid="$3" provider="$4"
-  local enc resp dms blocking draft mergeable decision unresolved owner name
+  local enc resp dms blocking draft mergeable decision unresolved standing pending owner name
   GCI_REVIEW=""
   [ -n "$path" ] && [ -n "$iid" ] || return 0
   if [ "$provider" = "gitlab" ]; then
@@ -385,7 +564,7 @@ gci_review_for_mr() {
     resp="$(cd "$repo" && glab api "projects/$enc/merge_requests/$iid" 2>/dev/null)" || return 0
     dms="$(printf '%s' "$resp" | jq -r '.detailed_merge_status // empty' 2>/dev/null)"
     [ -n "$dms" ] || return 0
-    blocking="$(printf '%s' "$resp" | jq -r '.blocking_discussions_resolved // true' 2>/dev/null)"
+    blocking="$(gci_gitlab_blocking_resolved "$resp")"
     GCI_REVIEW="$(gci_gitlab_review_state "$dms" "$blocking")"
   elif [ "$provider" = "github" ]; then
     owner="${path%%/*}"; name="${path#*/}"
@@ -397,15 +576,20 @@ gci_review_for_mr() {
             mergeable
             reviewDecision
             reviewThreads(first:100){ nodes { isResolved } }
+            reviewRequests(first:1){ totalCount }
+            latestOpinionatedReviews(first:100){ nodes { state } }
           }
         }
       }' 2>/dev/null)" || return 0
-    draft="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.isDraft // empty' 2>/dev/null)"
+    # NB: `// empty` would erase isDraft:false (jq treats false as falsy); only bail on a missing PR.
+    draft="$(printf '%s' "$resp" | jq -r 'if .data.repository.pullRequest == null then empty else (.data.repository.pullRequest.isDraft|tostring) end' 2>/dev/null)"
     [ -n "$draft" ] || return 0
     mergeable="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.mergeable // "UNKNOWN"' 2>/dev/null)"
     decision="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewDecision // ""' 2>/dev/null)"
     unresolved="$(printf '%s' "$resp" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved==false)] | length' 2>/dev/null)"
-    GCI_REVIEW="$(gci_github_review_state "$draft" "$mergeable" "$decision" "${unresolved:-0}")"
+    standing="$(printf '%s' "$resp" | jq -r '[.data.repository.pullRequest.latestOpinionatedReviews.nodes[]? | select(.state=="CHANGES_REQUESTED")] | length' 2>/dev/null)"
+    pending="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewRequests.totalCount // 0' 2>/dev/null)"
+    GCI_REVIEW="$(gci_github_review_state "$draft" "$mergeable" "$decision" "${unresolved:-0}" "${standing:-0}" "${pending:-0}")"
   fi
   return 0
 }

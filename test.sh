@@ -101,6 +101,7 @@ check "rg-approved" "✅" "$(gci_review_glyph approved)"
 check "rg-awaiting" "👀" "$(gci_review_glyph awaiting)"
 check "rg-none"     ""   "$(gci_review_glyph none)"
 check "rg-empty"    ""   "$(gci_review_glyph '')"
+check "rg-merged"   "🔀" "$(gci_review_glyph merged)"
 
 # gci_review_badge_glyph — only attention + ready surface on the label
 check "rb-conflict" "⚠️" "$(gci_review_badge_glyph conflict)"
@@ -109,6 +110,7 @@ check "rb-approved" "✅" "$(gci_review_badge_glyph approved)"
 check "rb-draft"    ""   "$(gci_review_badge_glyph draft)"
 check "rb-awaiting" ""   "$(gci_review_badge_glyph awaiting)"
 check "rb-none"     ""   "$(gci_review_badge_glyph none)"
+check "rb-merged"   "🔀" "$(gci_review_badge_glyph merged)"
 
 # gci_mr_section — My-MRs pane bucketing
 check "sec-approved" "ready"  "$(gci_mr_section approved)"
@@ -127,6 +129,13 @@ check "gl-cimust"     "awaiting" "$(gci_gitlab_review_state ci_must_pass)"
 check "gl-unblocked"  "changes"  "$(gci_gitlab_review_state ci_still_running false)"
 check "gl-blocked-ok" "awaiting" "$(gci_gitlab_review_state ci_still_running true)"
 
+# gci_gitlab_blocking_resolved — MR JSON -> "true"/"false"; a real false must survive
+# (jq's `//` treats false as falsy and would erase it), missing/null still defaults true.
+check "blk-false"   "false" "$(gci_gitlab_blocking_resolved '{"blocking_discussions_resolved":false}')"
+check "blk-true"    "true"  "$(gci_gitlab_blocking_resolved '{"blocking_discussions_resolved":true}')"
+check "blk-missing" "true"  "$(gci_gitlab_blocking_resolved '{"detailed_merge_status":"mergeable"}')"
+check "blk-null"    "true"  "$(gci_gitlab_blocking_resolved '{"blocking_discussions_resolved":null}')"
+
 # gci_github_review_state — (isDraft, mergeable, reviewDecision, unresolved) -> canonical
 check "gh-conflict"      "conflict" "$(gci_github_review_state false CONFLICTING APPROVED 0)"
 check "gh-changes-dec"   "changes"  "$(gci_github_review_state false MERGEABLE CHANGES_REQUESTED 0)"
@@ -136,6 +145,29 @@ check "gh-approved"      "approved" "$(gci_github_review_state false MERGEABLE A
 check "gh-awaiting"      "awaiting" "$(gci_github_review_state false MERGEABLE REVIEW_REQUIRED 0)"
 check "gh-unknown"       "awaiting" "$(gci_github_review_state false UNKNOWN '' 0)"
 check "gh-conflict-wins" "conflict" "$(gci_github_review_state true CONFLICTING CHANGES_REQUESTED 3)"
+# Re-requested review: pending request neutralizes the sticky reviewDecision and unresolved
+# threads (both outlive a re-request), but never a standing CHANGES_REQUESTED review.
+check "gh-rerequest"     "awaiting" "$(gci_github_review_state false MERGEABLE CHANGES_REQUESTED 2 0 1)"
+check "gh-rereq-thr"     "awaiting" "$(gci_github_review_state false MERGEABLE REVIEW_REQUIRED 2 0 1)"
+check "gh-standing-wins" "changes"  "$(gci_github_review_state false MERGEABLE CHANGES_REQUESTED 0 1 1)"
+check "gh-first-request" "awaiting" "$(gci_github_review_state false MERGEABLE REVIEW_REQUIRED 0 0 1)"
+# A pending request must never demote approved or draft, and a standing changes-request
+# must still beat draft (changes > draft precedence).
+check "gh-approved-pend"  "approved" "$(gci_github_review_state false MERGEABLE APPROVED 0 0 1)"
+check "gh-draft-pend"     "draft"    "$(gci_github_review_state true MERGEABLE CHANGES_REQUESTED 2 0 1)"
+check "gh-standing-draft" "changes"  "$(gci_github_review_state true MERGEABLE CHANGES_REQUESTED 0 1 0)"
+
+# gci_review_for_mr end to end against a canned GraphQL response: a gh() function shadows
+# the binary inside the command substitution. Pins the jq parse layer — isDraft:false must
+# not early-return (jq `//` treats false as falsy) — and the six-argument call order.
+gh() { printf '%s' "$GH_FIXTURE"; }
+GH_FIXTURE='{"data":{"repository":{"pullRequest":{"isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"CHANGES_REQUESTED","reviewThreads":{"nodes":[{"isResolved":false},{"isResolved":false}]},"reviewRequests":{"totalCount":1},"latestOpinionatedReviews":{"nodes":[]}}}}}'
+gci_review_for_mr "$DIR" myorg/app 1 github
+check "e2e-gh-rerequest" "awaiting" "$GCI_REVIEW"
+GH_FIXTURE='{"data":{"repository":{"pullRequest":{"isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"CHANGES_REQUESTED","reviewThreads":{"nodes":[]},"reviewRequests":{"totalCount":1},"latestOpinionatedReviews":{"nodes":[{"state":"CHANGES_REQUESTED"}]}}}}}'
+gci_review_for_mr "$DIR" myorg/app 1 github
+check "e2e-gh-standing" "changes" "$GCI_REVIEW"
+unset -f gh
 
 # gci_strip_ci_prefix with a review glyph on the MR token (review-state badge)
 check "strip-rev-ready"    "inventory"   "$(gci_strip_ci_prefix '🟢 ✅!250 inventory')"
@@ -147,6 +179,12 @@ check "strip-rev-noemoji"  "svc"         "$(gci_strip_ci_prefix '✅!7 svc')"
 check "strip-rev-keep"     "✅ done"      "$(gci_strip_ci_prefix '✅ done')"
 # Idempotent: re-stripping an already-clean label is a no-op:
 check "strip-rev-idem"     "inventory"   "$(gci_strip_ci_prefix "$(gci_strip_ci_prefix '🟢 ✅!250 inventory')")"
+
+# gci_strip_ci_prefix with the 🔀 merged-PR/MR token (positive merged badge)
+check "strip-merged-pr"    "dbt"         "$(gci_strip_ci_prefix '🔀#123 dbt')"
+check "strip-merged-mr"    "dbt"         "$(gci_strip_ci_prefix '🔀!123 dbt')"
+check "strip-merged-full"  "web-app"     "$(gci_strip_ci_prefix '🟢 🔀#42 web-app')"
+check "strip-merged-idem"  "dbt"         "$(gci_strip_ci_prefix "$(gci_strip_ci_prefix '🟢 🔀#123 dbt')")"
 
 # gci_pane_cwds — ordered cwds of a workspace's panes (pure; foreground_cwd, else cwd).
 panes_ord='{"result":{"panes":[
@@ -185,7 +223,39 @@ pick_none='{"panes":[{"workspace_id":"wB","cwd":"'"$pt/plug"'"},{"workspace_id":
 check "cwd-git-fallback" "$pt/plug" "$(gci_pick_pane_cwd wB "$pick_none")"
 # Unknown workspace -> empty:
 check "cwd-git-none"     ""         "$(gci_pick_pane_cwd wZ "$pick_json")"
+# An installed plugin's own checkout (cwd under the herdr plugins root) HAS an origin remote,
+# so the origin heuristic alone can't reject it — it must be skipped by path, and must never
+# shadow the real repo pane nor serve as the fallback:
+mkdir -p "$pt/plugins/github"
+git -C "$pt/plugins/github" init -q
+git -C "$pt/plugins/github" remote add origin https://github.com/x/some-plugin.git
+pick_plug='{"result":{"panes":[
+  {"workspace_id":"wC","foreground_cwd":"'"$pt/plugins/github"'"},
+  {"workspace_id":"wC","foreground_cwd":"'"$pt/repo"'"}
+]}}'
+check "cwd-skip-plugin" "$pt/repo" "$(GCI_PLUGINS_ROOT="$pt/plugins" gci_pick_pane_cwd wC "$pick_plug")"
+pick_plug_only='{"panes":[
+  {"workspace_id":"wD","cwd":"'"$pt/plugins/github"'"},
+  {"workspace_id":"wD","cwd":"'"$pt/plain"'"}
+]}'
+check "cwd-plugin-fallback" "$pt/plain" "$(GCI_PLUGINS_ROOT="$pt/plugins" gci_pick_pane_cwd wD "$pick_plug_only")"
 rm -rf "$pt"
+
+# gci_upstream_path — fork checkouts: `upstream` remote on the SAME host as origin -> its
+# slug (used to retry PR/MR + CI lookups in the base repo); anything else -> empty.
+ut="$(mktemp -d)"
+git -C "$ut" init -q
+check "up-no-origin"   ""         "$(gci_upstream_path "$ut")"
+git -C "$ut" remote add origin git@github.com:me/app.git
+check "up-no-upstream" ""         "$(gci_upstream_path "$ut")"
+git -C "$ut" remote add upstream git@github.com:core/app.git
+check "up-same-host"   "core/app" "$(gci_upstream_path "$ut")"
+git -C "$ut" remote set-url upstream https://github.com/core/app
+check "up-https-form"  "core/app" "$(gci_upstream_path "$ut")"
+git -C "$ut" remote set-url upstream git@gitlab.com:core/app.git
+check "up-other-host"  ""         "$(gci_upstream_path "$ut")"
+check "up-nonrepo"     ""         "$(gci_upstream_path "$ut/nope")"
+rm -rf "$ut"
 
 # gci_daemon_alive — true only when <pidfile> exists and names a live process. Backs the
 # poller's is_running check and its self-healing `start` (which relaunches when this is false).
@@ -199,5 +269,130 @@ gci_daemon_alive "$dtmp"; check "daemon-dead-pid"  "1" "$?"
 gci_daemon_alive "$dtmp"; check "daemon-empty"     "1" "$?"
 rm -f "$dtmp"                                        # missing pidfile -> not alive
 gci_daemon_alive "$dtmp"; check "daemon-nofile"    "1" "$?"
+
+# gci_pid_matches — identity, not just liveness (pid reuse after reboot)
+gci_pid_matches $$ "test.sh";           check "pidmatch-self"     "0" "$?"
+gci_pid_matches $$ "poller-ctl.sh run"; check "pidmatch-mismatch" "1" "$?"
+bash -c 'exit 0' & _dead=$!; wait "$_dead" 2>/dev/null
+gci_pid_matches "$_dead" "test.sh";     check "pidmatch-deadpid"  "1" "$?"
+
+# gci_daemon_alive with pattern arg
+echo $$ > "$dtmp"
+gci_daemon_alive "$dtmp" "test.sh";           check "daemon-alive-pattern"    "0" "$?"
+gci_daemon_alive "$dtmp" "poller-ctl.sh run"; check "daemon-reused-pid"       "1" "$?"
+
+# gci_github_checks_status — aggregate a head commit's check runs; the highest-severity
+# run decides the overall status (a repo can have many workflows per push, so sampling a
+# single run — e.g. a skipped "Claude Code" workflow — misreports CI that is green/running).
+# Input lines: status \t conclusion \t id \t url \t updated. Output: winner as canonical \t id \t url \t updated.
+check "chk-running-wins" "running	3	u3	t3" "$(printf 'completed\tskipped\t1\tu1\tt1\ncompleted\tsuccess\t2\tu2\tt2\nin_progress\t\t3\tu3\tt3\n' | gci_github_checks_status)"
+check "chk-failed-wins"  "failed	2	u2	t2"  "$(printf 'in_progress\t\t1\tu1\tt1\ncompleted\tfailure\t2\tu2\tt2\ncompleted\tsuccess\t3\tu3\tt3\n' | gci_github_checks_status)"
+check "chk-success"      "success	2	u2	t2" "$(printf 'completed\tskipped\t1\tu1\tt1\ncompleted\tsuccess\t2\tu2\tt2\n' | gci_github_checks_status)"
+check "chk-queued"       "pending	1	u1	t1" "$(printf 'queued\t\t1\tu1\tt1\ncompleted\tskipped\t2\tu2\tt2\n' | gci_github_checks_status)"
+check "chk-skipped-only" "skipped	1	u1	t1" "$(printf 'completed\tskipped\t1\tu1\tt1\n' | gci_github_checks_status)"
+check "chk-empty"        "" "$(printf '' | gci_github_checks_status)"
+
+# gci_latest_ci (github) — a branch missing on the remote (deleted on merge, or not pushed
+# yet) makes commits/<ref>/check-runs fail with HTTP 422 "No commit found for SHA". That is
+# "no CI" (rc 0, empty status), NOT a transient api-error (rc 5): rc 5 makes the poller SKIP
+# the workspace forever, freezing a stale label and never applying the merged badge.
+lct="$(mktemp -d)"
+git -C "$lct" init -q
+git -C "$lct" remote add origin git@github.com:acme/web-app.git
+git -C "$lct" -c user.email=t@t -c user.name=t commit --allow-empty -q -m x
+gh() { printf 'gh: No commit found for SHA: gone-branch (HTTP 422)'; return 1; }
+gci_latest_ci "$lct"
+check "ci-deleted-branch-rc"     "0" "$?"
+check "ci-deleted-branch-status" ""  "$GCI_STATUS"
+unset -f gh; rm -rf "$lct"
+
+# gci_review_for_mr (github) — isDraft:false must survive extraction (jq `//` treats false
+# as falsy, so `// empty` would erase it and no non-draft PR could ever get a review state).
+gh() { printf '%s' "$GH_STUB"; } # shadows the gh CLI inside gci_review_for_mr
+GH_STUB='{"data":{"repository":{"pullRequest":{"isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"APPROVED","reviewThreads":{"nodes":[]}}}}}'
+gci_review_for_mr "$PWD" "acme/web-app" 41 github
+check "review-gh-nondraft" "approved" "$GCI_REVIEW"
+GH_STUB='{"data":{"repository":{"pullRequest":{"isDraft":true,"mergeable":"MERGEABLE","reviewDecision":null,"reviewThreads":{"nodes":[]}}}}}'
+gci_review_for_mr "$PWD" "acme/web-app" 41 github
+check "review-gh-draft"    "draft"    "$GCI_REVIEW"
+GH_STUB='{"data":{"repository":{"pullRequest":null}}}'
+gci_review_for_mr "$PWD" "acme/web-app" 41 github
+check "review-gh-missing"  ""         "$GCI_REVIEW"
+unset -f gh
+
+# Configurable icons — GITLAB_CI_ICON_* overrides (defaults are pinned by the em-*/rg-*/rb-*
+# checks above, which run with all icon vars unset).
+check "ov-ok"         "X" "$(GITLAB_CI_ICON_OK=X gci_status_emoji success)"
+check "ov-fail"       "F" "$(GITLAB_CI_ICON_FAIL=F gci_status_emoji failed)"
+check "ov-run"        "R" "$(GITLAB_CI_ICON_RUN=R gci_status_emoji pending)"
+check "ov-none"       "N" "$(GITLAB_CI_ICON_NONE=N gci_status_emoji canceled)"
+check "ov-approved"   "A" "$(GITLAB_CI_ICON_APPROVED=A gci_review_glyph approved)"
+check "ov-draft"      "D" "$(GITLAB_CI_ICON_DRAFT=D gci_review_glyph draft)"
+check "ov-badge"      "C" "$(GITLAB_CI_ICON_CONFLICT=C gci_review_badge_glyph conflict)"
+check "ov-badge-drft" ""  "$(GITLAB_CI_ICON_DRAFT=D gci_review_badge_glyph draft)"
+# Set-but-EMPTY hides the glyph (e.g. no dot for "no pipeline"):
+check "ov-none-empty" ""  "$(GITLAB_CI_ICON_NONE= gci_status_emoji canceled)"
+
+# Strip round-trip with overrides: label built the way poll_once builds it.
+# The token is built the way status_for_repo builds it: "<badge> <sigil><id>" (space between
+# the review badge and the id, per the space-before-pr-id change). strip must handle the space
+# or the whole "<badge> #12" token accumulates on every poll.
+check "ov-strip-roundtrip" "dbt" "$(
+  GITLAB_CI_ICON_OK=✔ GITLAB_CI_ICON_APPROVED=A
+  gci_strip_ci_prefix "$(gci_status_emoji success) $(gci_review_badge_glyph approved) !12 dbt"
+)"
+# Same, GitHub sigil + a default (non-override) badge glyph, and idempotent on a doubled token:
+check "ov-strip-badge-spaced"  "dbt" "$(gci_strip_ci_prefix "$(gci_review_badge_glyph approved) #12 dbt")"
+check "ov-strip-badge-glued"   "dbt" "$(gci_strip_ci_prefix "$(gci_review_badge_glyph approved)#12 dbt")"
+# The default emoji must STILL strip while overrides are active, or labels decorated
+# before an icon-config change accumulate prefixes on the first poll after it:
+check "ov-strip-default"   "dbt" "$(GITLAB_CI_ICON_OK=✔ gci_strip_ci_prefix '🟢 dbt')"
+# Empty round-trip: no dot emitted, MR token still stripped:
+check "ov-empty-roundtrip" "svc" "$(GITLAB_CI_ICON_NONE= gci_strip_ci_prefix "$(gci_status_emoji unknown)!123 svc")"
+# Empty-override guard: an empty pattern must be skipped by strip ("" matches anything —
+# here it would eat the leading space of the label):
+check "ov-empty-strip"     " x"  "$(GITLAB_CI_ICON_NONE= gci_strip_ci_prefix ' x')"
+
+# poller-ctl ensure — restart after unexpected death only
+etmp="$(mktemp -d)"
+printf '#!/bin/sh\necho "{\\"result\\":{\\"workspaces\\":[]}}"\n' > "$etmp/herdr"
+chmod +x "$etmp/herdr"
+pctl() { env HERDR_PLUGIN_STATE_DIR="$etmp/state" HERDR_PLUGIN_CONFIG_DIR="$etmp" \
+             HERDR_BIN_PATH="$etmp/herdr" GITLAB_CI_REFRESH=1 GITLAB_CI_START_HEAL_SECS=0 \
+             bash "$DIR/poller-ctl.sh" "$@"; }
+
+pctl ensure >/dev/null 2>&1
+[ -f "$etmp/state/poller.pid" ]; check "ensure-no-pidfile-stays-stopped" "1" "$?"
+
+bash -c 'exit 0' & _dead=$!; wait "$_dead" 2>/dev/null
+mkdir -p "$etmp/state"; echo "$_dead" > "$etmp/state/poller.pid"
+pctl ensure >/dev/null 2>&1
+gci_daemon_alive "$etmp/state/poller.pid" "poller-ctl.sh run"; check "ensure-restarts-dead" "0" "$?"
+
+_before="$(cat "$etmp/state/poller.pid")"
+pctl ensure >/dev/null 2>&1
+check "ensure-noop-when-running" "$_before" "$(cat "$etmp/state/poller.pid")"
+
+pctl stop >/dev/null 2>&1
+[ -f "$etmp/state/poller.pid" ]; check "stop-removes-pidfile" "1" "$?"
+pctl ensure >/dev/null 2>&1
+[ -f "$etmp/state/poller.pid" ]; check "ensure-respects-stop" "1" "$?"
+
+# ensure-over-foreign-pid: restart daemon over a reused (foreign) pid, never signal it
+sleep 100 & _foreign=$!
+echo "$_foreign" > "$etmp/state/poller.pid"
+pctl ensure >/dev/null 2>&1
+gci_daemon_alive "$etmp/state/poller.pid" "poller-ctl.sh run"; check "ensure-over-foreign-pid-restarted" "0" "$?"
+kill -0 "$_foreign" 2>/dev/null; check "ensure-over-foreign-pid-untouched" "0" "$?"
+pctl stop >/dev/null 2>&1
+
+# stop-ignores-foreign-pid: stop never signals a reused pid, identity guard protects it
+echo "$_foreign" > "$etmp/state/poller.pid"
+pctl stop >/dev/null 2>&1
+[ -f "$etmp/state/poller.pid" ]; check "stop-ignores-foreign-removes-pidfile" "1" "$?"
+kill -0 "$_foreign" 2>/dev/null; check "stop-ignores-foreign-alive" "0" "$?"
+kill "$_foreign" 2>/dev/null
+
+rm -rf "$etmp"
 
 exit $fail

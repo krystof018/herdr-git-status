@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Always-live poller: reflects each space's GitLab CI status as a colored dot
 # prefixed onto the space's label in the herdr sidebar. It never touches the
-# agent status dot. Control: start | stop | toggle | status | poll-once | restore | run
+# agent status dot. Control: start | stop | toggle | ensure | status | poll-once | restore | run
 #
 # Env:
 #   GITLAB_CI_REFRESH   poll interval seconds (default 30)
@@ -43,12 +43,22 @@ status_for_repo() {
       if [ -n "$GCI_STATUS" ]; then
         SPACE_EMOJI="$(gci_status_emoji "$GCI_STATUS")"
       else
-        SPACE_EMOJI="⚪"   # supported remote, but no pipeline/run for this branch
+        SPACE_EMOJI="$(gci_status_emoji '')"   # supported remote, but no pipeline/run for this branch
       fi
-      if gci_open_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
-        gci_review_for_mr "$cwd" "$GCI_PATH" "$GCI_MR_IID" "$GCI_PROVIDER"
+      # Open PR -> its review badge. No open PR (rc 3) -> it may be merged: surface a positive
+      # merged badge. Missing-args/api-error (rc 1|2) -> leave empty, don't mislabel. This lives
+      # here (not inside the old `if gci_open_pr`) because a merged PR returns rc 3 by definition,
+      # so gluing it to the open-PR success path would make it unreachable in the case it covers.
+      gci_open_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; rc=$?
+      if [ "$rc" -eq 0 ]; then
+        gci_review_for_mr "$cwd" "$GCI_MR_PATH" "$GCI_MR_IID" "$GCI_PROVIDER"
         glyph="$(gci_review_badge_glyph "$GCI_REVIEW")"
-        SPACE_MR="$glyph$GCI_MR_SIGIL$GCI_MR_IID"
+        SPACE_MR="$GCI_MR_SIGIL$GCI_MR_IID"
+        [ -n "$glyph" ] && SPACE_MR="$glyph $SPACE_MR"   # "✅ #123", plain "#123" with no glyph
+      elif [ "$rc" -eq 3 ] && gci_merged_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
+        glyph="$(gci_review_badge_glyph "$GCI_REVIEW")"
+        SPACE_MR="$GCI_MR_SIGIL$GCI_MR_IID"
+        [ -n "$glyph" ] && SPACE_MR="$glyph $SPACE_MR"
       fi
       ;;
   esac
@@ -94,7 +104,7 @@ restore_labels() {
   done 9< <(ws_list)
 }
 
-is_running() { gci_daemon_alive "$PIDFILE"; }
+is_running() { gci_daemon_alive "$PIDFILE" "poller-ctl.sh run"; }
 
 # Launch a detached daemon and record its pid. The run-loop takes pidfile ownership, so an
 # older daemon (if any) self-exits on its next tick — this converges to a single poller.
@@ -133,7 +143,7 @@ case "${1:-status}" in
   stop)
     if [ -f "$PIDFILE" ]; then
       p="$(cat "$PIDFILE" 2>/dev/null)"; rm -f "$PIDFILE"
-      if [ -n "$p" ]; then
+      if [ -n "$p" ] && gci_pid_matches "$p" "poller-ctl.sh run"; then
         kill "$p" 2>/dev/null
         # Bounded wait for graceful exit (the herdr call paces each iteration); TERM is
         # deferred while bash is mid-glab, so force-kill if it's still alive afterward.
@@ -147,10 +157,15 @@ case "${1:-status}" in
   toggle)
     if is_running; then exec bash "$DIR/poller-ctl.sh" stop; else exec bash "$DIR/poller-ctl.sh" start; fi
     ;;
+  ensure)
+    # Restart only after an unexpected death: a reboot/crash leaves the pidfile
+    # behind, while `stop` removes it — so deliberate stops stay stopped.
+    if [ -f "$PIDFILE" ] && ! is_running; then exec bash "$DIR/poller-ctl.sh" start; fi
+    ;;
   status)
     if is_running; then echo "running (pid $(cat "$PIDFILE"))"; else echo "stopped"; fi
     ;;
   poll-once) poll_once ;;
   restore)   restore_labels ;;
-  *) echo "usage: poller-ctl.sh start|stop|toggle|status|poll-once|restore" >&2; exit 2 ;;
+  *) echo "usage: poller-ctl.sh start|stop|toggle|ensure|status|poll-once|restore" >&2; exit 2 ;;
 esac

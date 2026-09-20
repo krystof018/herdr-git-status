@@ -29,6 +29,11 @@ title = "Toggle CI status dots"
 command = ["bash", "poller-ctl.sh", "toggle"]
 
 [[actions]]
+id = "ensure"
+title = "Ensure CI status dots poller is running"
+command = ["bash", "poller-ctl.sh", "ensure"]
+
+[[actions]]
 id = "open-mr"
 title = "Open My MRs pane"
 contexts = ["workspace"]

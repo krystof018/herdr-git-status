@@ -1,7 +1,7 @@
 # GitLab & GitHub CI Status — herdr plugin
 
 Surfaces CI status inside herdr — for both **GitLab** (pipelines + merge requests via `glab`) and
-**GitHub** (Actions runs + pull requests via `gh`), auto-detected from each repo's `origin` host — two
+**GitHub** (check runs + pull requests via `gh`), auto-detected from each repo's `origin` host — two
 ways:
 
 1. **Live status dots in the spaces sidebar** — a background poller prefixes each space's label with a
@@ -38,7 +38,7 @@ ways:
  Project   acme/web-app               ← links to the repo
  Branch    feature/checkout-flow
 
- Run       #28165711782   ✓ passed    ← #id links to the Actions run
+ Run       #28165711782   ✓ passed    ← #id links to the decisive check run
  Updated   2m ago
  PR        #123                       ← links to the pull request
 
@@ -54,8 +54,14 @@ In the sidebar, those spaces show as `🟢 !123 my-service` and `🟢 #123 web-a
 The open MR/PR number is also prefixed with a **review-state glyph** when the merge request
 needs attention or is ready: `💬` changes requested / unresolved threads · `⚠️` merge conflict
 (needs rebase) · `✅` approved & mergeable (ready to merge). Drafts and MRs merely awaiting
-review show the plain `!123` / `#123` with no glyph. So a space might read `🟢 ✅!123 my-service`
+review show the plain `!123` / `#123` with no glyph. On GitHub, re-requesting review after
+addressing feedback returns the PR to awaiting (no glyph) — stale threads and the old
+review decision don't keep it at `💬` while the ball is in a reviewer's court. So a space might read `🟢 ✅!123 my-service`
 (green pipeline, MR approved) or `🔴 💬!88 billing-api` (red pipeline, changes requested).
+
+Once the branch's MR/PR is **merged**, the open-request token is replaced by a `🔀` merged badge
+(e.g. `🔀#123` / `🔀!123`) — a positive signal that the branch landed, instead of the token
+silently disappearing when the MR/PR leaves the open state.
 
 ## Requirements
 
@@ -121,8 +127,60 @@ pane: `r` refresh, `q` quit (Ctrl-C also closes), auto-refresh 15s. Always invok
 `herdr plugin action invoke gitlab-ci-status.open-mr`.
 
 > **Note on branch vs MR/PR pipelines:** status is looked up for the current *branch* (GitLab pipelines
-> by `ref`, GitHub Actions runs by `branch`). GitLab projects that run CI only as merge-request
+> by `ref`; GitHub aggregates all check runs on the branch head — the most severe one wins, so one
+> skipped workflow can't mask a green or running push). GitLab projects that run CI only as merge-request
 > pipelines (common in some GitLab setups) show ⚪ on a feature branch until it has a branch pipeline.
+
+## Autostart after reboot
+
+The poller is a detached daemon: it survives herdr restarts but dies with the
+machine. The `ensure` action restarts it only if it died unexpectedly (a
+leftover pidfile with a dead process). A deliberate `stop` removes the pidfile,
+so `ensure` never overrides it.
+
+Wire `ensure` to your service manager so it fires when the herdr server comes
+up — event-driven, no timers, cannot block sleep:
+
+**macOS (launchd)** — `~/Library/LaunchAgents/dev.you.herdr-git-status-ensure.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.you.herdr-git-status-ensure</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/sh</string><string>-c</string>
+    <string>test -S "$HOME/.config/herdr/herdr.sock" &amp;&amp; exec /absolute/path/to/herdr plugin action invoke gitlab-ci-status.ensure || true</string>
+  </array>
+  <key>WatchPaths</key><array><string>/Users/you/.config/herdr/herdr.sock</string></array>
+  <key>RunAtLoad</key><true/>
+</dict></plist>
+```
+
+WatchPaths and the herdr command path need absolute paths (launchd expands nothing). For the command path, substitute the output of `command -v herdr` so it uses your actual herdr binary, not the minimal PATH. Load it with
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<name>.plist`.
+
+**Linux (systemd user units)**:
+
+```ini
+# ~/.config/systemd/user/herdr-git-status-ensure.path
+[Path]
+PathExists=%h/.config/herdr/herdr.sock
+[Install]
+WantedBy=default.target
+
+# ~/.config/systemd/user/herdr-git-status-ensure.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/env herdr plugin action invoke gitlab-ci-status.ensure
+```
+
+Enable with `systemctl --user enable --now herdr-git-status-ensure.path`.
+The service stays active after the first trigger, ensuring the poller survives herdr restarts during the login session.
+
+If the poller crashes while herdr keeps running, nothing re-fires until the
+next herdr start — restart manually or add a timer if that ever matters.
 
 ## Configuration
 
@@ -133,6 +191,23 @@ echo "GITLAB_CI_REFRESH=20" >> "$(herdr plugin config-dir gitlab-ci-status)/.env
 ```
 
 - `GITLAB_CI_REFRESH` — refresh interval in seconds (pane default `15`, poller default `30`).
+- `GITLAB_CI_ICON_OK` / `_FAIL` / `_RUN` / `_NONE` — sidebar CI dot per state
+  (defaults `🟢` `🔴` `🟡` `⚪`). Set a var to *empty* to hide that dot, e.g.
+  `GITLAB_CI_ICON_NONE=` shows nothing when a branch has no pipeline.
+- `GITLAB_CI_ICON_CONFLICT` / `_CHANGES` / `_APPROVED` / `_DRAFT` / `_AWAITING` / `_MERGED` —
+  review-state glyphs (defaults `⚠️` `💬` `✅` `📝` `👀` `🔀`). The sidebar badge only ever shows
+  conflict/changes/approved/merged; draft/awaiting appear in the My MRs pane.
+
+Example — monochrome Nerd Font icons instead of emoji (needs a Nerd-patched terminal font,
+otherwise these render as tofu boxes):
+
+```sh
+# nf-fa-check U+F00C · nf-fa-times U+F00D · nf-fa-circle U+F111
+#GITLAB_CI_ICON_OK=
+#GITLAB_CI_ICON_FAIL=
+#GITLAB_CI_ICON_RUN=
+#GITLAB_CI_ICON_NONE=          # empty = no dot for "no pipeline"
+```
 
 To change keybindings, edit the `[[keys.command]]` entries in your `config.toml` (see above). For pane
 placement, edit `herdr-plugin.toml` and re-link.
@@ -165,7 +240,7 @@ stripping any existing CI dot and `!`/`#` token, so it is idempotent and survive
 | File | Purpose |
 |------|---------|
 | `herdr-plugin.toml` | Manifest: actions (`open`/`open-mr`/`start`/`stop`/`toggle`), the `ci` and `mr` panes, and keybindings. |
-| `poller-ctl.sh` | Always-live poller maintaining the colored CI dot on each space label: `start`/`stop`/`toggle`/`status`. |
+| `poller-ctl.sh` | Always-live poller maintaining the colored CI dot on each space label: `start`/`stop`/`toggle`/`ensure`/`status`. |
 | `open.sh` | Resolves the repo dir from workspace context and opens the detail pane. |
 | `ci-pane.sh` | The detail pane's live fetch → render → sleep loop (`GITLAB_CI_ONCE=1` for one-shot output). |
 | `open-mr.sh` | Resolves the repo context and opens the "My MRs" pane. |
