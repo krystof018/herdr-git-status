@@ -195,6 +195,14 @@ gci_gitlab_review_state() {
   esac
 }
 
+# blocking_discussions_resolved from a GitLab MR JSON blob, as "true"/"false". Missing or
+# null still defaults to "true", but a real false must survive — jq's `//` treats false as
+# falsy and would erase it, so the 'changes' fallback above could never fire.
+# Args: <mr_json>
+gci_gitlab_blocking_resolved() {
+  printf '%s' "$1" | jq -r '.blocking_discussions_resolved | if . == null then "true" else tostring end' 2>/dev/null
+}
+
 # GitHub PR -> canonical review state, from a GraphQL pull-request projection. Precedence
 # matches the badge priority (conflict > changes > draft > approved > awaiting).
 # Args: <isDraft: true|false> <mergeable: MERGEABLE|CONFLICTING|UNKNOWN>
@@ -385,7 +393,7 @@ gci_review_for_mr() {
     resp="$(cd "$repo" && glab api "projects/$enc/merge_requests/$iid" 2>/dev/null)" || return 0
     dms="$(printf '%s' "$resp" | jq -r '.detailed_merge_status // empty' 2>/dev/null)"
     [ -n "$dms" ] || return 0
-    blocking="$(printf '%s' "$resp" | jq -r '.blocking_discussions_resolved // true' 2>/dev/null)"
+    blocking="$(gci_gitlab_blocking_resolved "$resp")"
     GCI_REVIEW="$(gci_gitlab_review_state "$dms" "$blocking")"
   elif [ "$provider" = "github" ]; then
     owner="${path%%/*}"; name="${path#*/}"

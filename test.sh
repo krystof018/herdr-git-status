@@ -127,6 +127,13 @@ check "gl-cimust"     "awaiting" "$(gci_gitlab_review_state ci_must_pass)"
 check "gl-unblocked"  "changes"  "$(gci_gitlab_review_state ci_still_running false)"
 check "gl-blocked-ok" "awaiting" "$(gci_gitlab_review_state ci_still_running true)"
 
+# gci_gitlab_blocking_resolved — MR JSON -> "true"/"false"; a real false must survive
+# (jq's `//` treats false as falsy and would erase it), missing/null still defaults true.
+check "blk-false"   "false" "$(gci_gitlab_blocking_resolved '{"blocking_discussions_resolved":false}')"
+check "blk-true"    "true"  "$(gci_gitlab_blocking_resolved '{"blocking_discussions_resolved":true}')"
+check "blk-missing" "true"  "$(gci_gitlab_blocking_resolved '{"detailed_merge_status":"mergeable"}')"
+check "blk-null"    "true"  "$(gci_gitlab_blocking_resolved '{"blocking_discussions_resolved":null}')"
+
 # gci_github_review_state — (isDraft, mergeable, reviewDecision, unresolved) -> canonical
 check "gh-conflict"      "conflict" "$(gci_github_review_state false CONFLICTING APPROVED 0)"
 check "gh-changes-dec"   "changes"  "$(gci_github_review_state false MERGEABLE CHANGES_REQUESTED 0)"
