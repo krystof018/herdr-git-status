@@ -200,4 +200,43 @@ gci_daemon_alive "$dtmp"; check "daemon-empty"     "1" "$?"
 rm -f "$dtmp"                                        # missing pidfile -> not alive
 gci_daemon_alive "$dtmp"; check "daemon-nofile"    "1" "$?"
 
+# gci_github_checks_status — aggregate a head commit's check runs; the highest-severity
+# run decides the overall status (a repo can have many workflows per push, so sampling a
+# single run — e.g. a skipped "Claude Code" workflow — misreports CI that is green/running).
+# Input lines: status \t conclusion \t id \t url \t updated. Output: winner as canonical \t id \t url \t updated.
+check "chk-running-wins" "running	3	u3	t3" "$(printf 'completed\tskipped\t1\tu1\tt1\ncompleted\tsuccess\t2\tu2\tt2\nin_progress\t\t3\tu3\tt3\n' | gci_github_checks_status)"
+check "chk-failed-wins"  "failed	2	u2	t2"  "$(printf 'in_progress\t\t1\tu1\tt1\ncompleted\tfailure\t2\tu2\tt2\ncompleted\tsuccess\t3\tu3\tt3\n' | gci_github_checks_status)"
+check "chk-success"      "success	2	u2	t2" "$(printf 'completed\tskipped\t1\tu1\tt1\ncompleted\tsuccess\t2\tu2\tt2\n' | gci_github_checks_status)"
+check "chk-queued"       "pending	1	u1	t1" "$(printf 'queued\t\t1\tu1\tt1\ncompleted\tskipped\t2\tu2\tt2\n' | gci_github_checks_status)"
+check "chk-skipped-only" "skipped	1	u1	t1" "$(printf 'completed\tskipped\t1\tu1\tt1\n' | gci_github_checks_status)"
+check "chk-empty"        "" "$(printf '' | gci_github_checks_status)"
+
+# gci_latest_ci (github) — a branch missing on the remote (deleted on merge, or not pushed
+# yet) makes commits/<ref>/check-runs fail with HTTP 422 "No commit found for SHA". That is
+# "no CI" (rc 0, empty status), NOT a transient api-error (rc 5): rc 5 makes the poller SKIP
+# the workspace forever, freezing a stale label and never applying the merged badge.
+lct="$(mktemp -d)"
+git -C "$lct" init -q
+git -C "$lct" remote add origin git@github.com:acme/web-app.git
+git -C "$lct" -c user.email=t@t -c user.name=t commit --allow-empty -q -m x
+gh() { printf 'gh: No commit found for SHA: gone-branch (HTTP 422)'; return 1; }
+gci_latest_ci "$lct"
+check "ci-deleted-branch-rc"     "0" "$?"
+check "ci-deleted-branch-status" ""  "$GCI_STATUS"
+unset -f gh; rm -rf "$lct"
+
+# gci_review_for_mr (github) — isDraft:false must survive extraction (jq `//` treats false
+# as falsy, so `// empty` would erase it and no non-draft PR could ever get a review state).
+gh() { printf '%s' "$GH_STUB"; } # shadows the gh CLI inside gci_review_for_mr
+GH_STUB='{"data":{"repository":{"pullRequest":{"isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"APPROVED","reviewThreads":{"nodes":[]}}}}}'
+gci_review_for_mr "$PWD" "acme/web-app" 41 github
+check "review-gh-nondraft" "approved" "$GCI_REVIEW"
+GH_STUB='{"data":{"repository":{"pullRequest":{"isDraft":true,"mergeable":"MERGEABLE","reviewDecision":null,"reviewThreads":{"nodes":[]}}}}}'
+gci_review_for_mr "$PWD" "acme/web-app" 41 github
+check "review-gh-draft"    "draft"    "$GCI_REVIEW"
+GH_STUB='{"data":{"repository":{"pullRequest":null}}}'
+gci_review_for_mr "$PWD" "acme/web-app" 41 github
+check "review-gh-missing"  ""         "$GCI_REVIEW"
+unset -f gh
+
 exit $fail

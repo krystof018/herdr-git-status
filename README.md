@@ -1,7 +1,7 @@
 # GitLab & GitHub CI Status — herdr plugin
 
 Surfaces CI status inside herdr — for both **GitLab** (pipelines + merge requests via `glab`) and
-**GitHub** (Actions runs + pull requests via `gh`), auto-detected from each repo's `origin` host — two
+**GitHub** (check runs + pull requests via `gh`), auto-detected from each repo's `origin` host — two
 ways:
 
 1. **Live status dots in the spaces sidebar** — a background poller prefixes each space's label with a
@@ -38,7 +38,7 @@ ways:
  Project   acme/web-app               ← links to the repo
  Branch    feature/checkout-flow
 
- Run       #28165711782   ✓ passed    ← #id links to the Actions run
+ Run       #28165711782   ✓ passed    ← #id links to the decisive check run
  Updated   2m ago
  PR        #123                       ← links to the pull request
 
@@ -121,7 +121,8 @@ pane: `r` refresh, `q` quit (Ctrl-C also closes), auto-refresh 15s. Always invok
 `herdr plugin action invoke gitlab-ci-status.open-mr`.
 
 > **Note on branch vs MR/PR pipelines:** status is looked up for the current *branch* (GitLab pipelines
-> by `ref`, GitHub Actions runs by `branch`). GitLab projects that run CI only as merge-request
+> by `ref`; GitHub aggregates all check runs on the branch head — the most severe one wins, so one
+> skipped workflow can't mask a green or running push). GitLab projects that run CI only as merge-request
 > pipelines (common in some GitLab setups) show ⚪ on a feature branch until it has a branch pipeline.
 
 ## Configuration

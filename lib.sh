@@ -143,6 +143,30 @@ gci_github_status() {
   esac
 }
 
+# Aggregate a head commit's GitHub check runs into one overall status. A push can trigger
+# many workflows (some skip-conditioned), so sampling a single run misreports CI; the PR
+# page aggregates all check runs, and so do we: the highest-severity canonical status wins
+# (failed > running > pending > manual > canceled > success > unknown > skipped). Reads
+# "status \t conclusion \t id \t url \t updated" lines; prints the winning run as
+# "canonical \t id \t url \t updated", or nothing on empty input.
+gci_github_checks_status() {
+  # NB: split manually — tab is IFS whitespace, so `read` would collapse the empty
+  # conclusion field of a non-completed run and shift the remaining columns.
+  local line st cc rest s p best="" bp=-1 tab=$'\t'
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    st="${line%%"$tab"*}"; rest="${line#*"$tab"}"
+    cc="${rest%%"$tab"*}"; rest="${rest#*"$tab"}"
+    s="$(gci_github_status "$st" "$cc")"
+    case "$s" in
+      failed) p=7 ;; running) p=6 ;; pending) p=5 ;; manual) p=4 ;;
+      canceled) p=3 ;; success) p=2 ;; unknown) p=1 ;; *) p=0 ;;
+    esac
+    if [ "$p" -gt "$bp" ]; then bp=$p; best="$s$tab$rest"; fi
+  done
+  printf '%s' "$best"
+}
+
 # Canonical review state -> glyph (full vocabulary; used by the My-MRs pane and tests).
 # States: conflict | changes | draft | approved | awaiting | (anything else / "") -> "".
 gci_review_glyph() {
@@ -305,7 +329,7 @@ gci_hyperlink() {
 #   0 ok | 1 not-a-git-repo | 2 no-origin | 3 remote-not-parseable
 #   4 unsupported-host (not GitLab/GitHub) | 5 api-error (incl. missing provider CLI)
 gci_latest_ci() {
-  local repo="$1" url parsed enc resp run st cc
+  local repo="$1" url parsed enc resp run
   GCI_HOST=""; GCI_PATH=""; GCI_BRANCH=""; GCI_PROVIDER=""; GCI_ERR=""
   GCI_STATUS=""; GCI_CI_ID=""; GCI_CI_URL=""; GCI_CI_UPDATED=""
   git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
@@ -328,15 +352,22 @@ gci_latest_ci() {
     GCI_CI_UPDATED="$(printf '%s' "$run" | jq -r '.updated_at // empty')"
   else
     command -v gh >/dev/null 2>&1 || { GCI_ERR="gh not found — install it (brew install gh) and run: gh auth login"; return 5; }
-    resp="$(cd "$repo" && gh api "repos/$GCI_PATH/actions/runs?branch=$GCI_BRANCH&per_page=1" 2>&1)" || { GCI_ERR="$resp"; return 5; }
-    run="$(printf '%s' "$resp" | jq -c '.workflow_runs[0] // empty' 2>/dev/null)"
+    # Aggregate ALL check runs on the branch head (what the PR page shows) — a push can
+    # trigger several workflows, and sampling one run (e.g. a skip-conditioned workflow)
+    # misreports CI that is actually green/running. The winning run supplies id/url/updated.
+    enc="$(gci_urlencode_path "$GCI_BRANCH")"
+    if ! resp="$(cd "$repo" && gh api "repos/$GCI_PATH/commits/$enc/check-runs?per_page=100" 2>&1)"; then
+      # A branch that isn't on the remote (yet, or anymore) simply has no CI to report.
+      # This endpoint answers 422 "No commit found for SHA" for an unresolvable ref (404
+      # only covers a missing repo), and merged branches are typically auto-deleted.
+      case "$resp" in *"HTTP 404"*|*"HTTP 422"*) return 0 ;; esac
+      GCI_ERR="$resp"; return 5
+    fi
+    run="$(printf '%s' "$resp" \
+      | jq -r '.check_runs[]? | [.status, .conclusion // "", (.id|tostring), .html_url // "", (.completed_at // .started_at // "")] | @tsv' 2>/dev/null \
+      | gci_github_checks_status)"
     [ -n "$run" ] || return 0
-    st="$(printf '%s' "$run" | jq -r '.status // "unknown"')"
-    cc="$(printf '%s' "$run" | jq -r '.conclusion // empty')"
-    GCI_STATUS="$(gci_github_status "$st" "$cc")"
-    GCI_CI_ID="$(printf '%s' "$run" | jq -r '.id // empty')"
-    GCI_CI_URL="$(printf '%s' "$run" | jq -r '.html_url // empty')"
-    GCI_CI_UPDATED="$(printf '%s' "$run" | jq -r '.updated_at // empty')"
+    IFS=$'\t' read -r GCI_STATUS GCI_CI_ID GCI_CI_URL GCI_CI_UPDATED <<<"$run"
   fi
   return 0
 }
@@ -400,7 +431,8 @@ gci_review_for_mr() {
           }
         }
       }' 2>/dev/null)" || return 0
-    draft="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.isDraft // empty' 2>/dev/null)"
+    # NB: `// empty` would erase isDraft:false (jq treats false as falsy); only bail on a missing PR.
+    draft="$(printf '%s' "$resp" | jq -r 'if .data.repository.pullRequest == null then empty else (.data.repository.pullRequest.isDraft|tostring) end' 2>/dev/null)"
     [ -n "$draft" ] || return 0
     mergeable="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.mergeable // "UNKNOWN"' 2>/dev/null)"
     decision="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewDecision // ""' 2>/dev/null)"
