@@ -101,6 +101,7 @@ check "rg-approved" "✅" "$(gci_review_glyph approved)"
 check "rg-awaiting" "👀" "$(gci_review_glyph awaiting)"
 check "rg-none"     ""   "$(gci_review_glyph none)"
 check "rg-empty"    ""   "$(gci_review_glyph '')"
+check "rg-merged"   "🔀" "$(gci_review_glyph merged)"
 
 # gci_review_badge_glyph — only attention + ready surface on the label
 check "rb-conflict" "⚠️" "$(gci_review_badge_glyph conflict)"
@@ -109,6 +110,7 @@ check "rb-approved" "✅" "$(gci_review_badge_glyph approved)"
 check "rb-draft"    ""   "$(gci_review_badge_glyph draft)"
 check "rb-awaiting" ""   "$(gci_review_badge_glyph awaiting)"
 check "rb-none"     ""   "$(gci_review_badge_glyph none)"
+check "rb-merged"   "🔀" "$(gci_review_badge_glyph merged)"
 
 # gci_mr_section — My-MRs pane bucketing
 check "sec-approved" "ready"  "$(gci_mr_section approved)"
@@ -147,6 +149,12 @@ check "strip-rev-noemoji"  "svc"         "$(gci_strip_ci_prefix '✅!7 svc')"
 check "strip-rev-keep"     "✅ done"      "$(gci_strip_ci_prefix '✅ done')"
 # Idempotent: re-stripping an already-clean label is a no-op:
 check "strip-rev-idem"     "inventory"   "$(gci_strip_ci_prefix "$(gci_strip_ci_prefix '🟢 ✅!250 inventory')")"
+
+# gci_strip_ci_prefix with the 🔀 merged-PR/MR token (positive merged badge)
+check "strip-merged-pr"    "dbt"         "$(gci_strip_ci_prefix '🔀#123 dbt')"
+check "strip-merged-mr"    "dbt"         "$(gci_strip_ci_prefix '🔀!123 dbt')"
+check "strip-merged-full"  "web-app"     "$(gci_strip_ci_prefix '🟢 🔀#42 web-app')"
+check "strip-merged-idem"  "dbt"         "$(gci_strip_ci_prefix "$(gci_strip_ci_prefix '🟢 🔀#123 dbt')")"
 
 # gci_pane_cwds — ordered cwds of a workspace's panes (pure; foreground_cwd, else cwd).
 panes_ord='{"result":{"panes":[

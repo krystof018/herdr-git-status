@@ -144,7 +144,7 @@ gci_github_status() {
 }
 
 # Canonical review state -> glyph (full vocabulary; used by the My-MRs pane and tests).
-# States: conflict | changes | draft | approved | awaiting | (anything else / "") -> "".
+# States: conflict | changes | draft | approved | awaiting | merged | (anything else / "") -> "".
 gci_review_glyph() {
   case "$1" in
     conflict) printf '⚠️' ;;
@@ -152,6 +152,7 @@ gci_review_glyph() {
     draft)    printf '📝' ;;
     approved) printf '✅' ;;
     awaiting) printf '👀' ;;
+    merged)   printf '🔀' ;;
     *)        printf '' ;;
   esac
 }
@@ -164,6 +165,7 @@ gci_review_badge_glyph() {
     conflict) printf '⚠️' ;;
     changes)  printf '💬' ;;
     approved) printf '✅' ;;
+    merged)   printf '🔀' ;;
     *)        printf '' ;;
   esac
 }
@@ -225,7 +227,7 @@ gci_strip_ci_prefix() {
   # Optional review glyph glued to the MR sigil (e.g. "✅!123"). Only stripped when it is
   # immediately followed by a sigil+digit, so a user label that merely starts with one of
   # these emoji (e.g. "✅ done") is never clobbered.
-  for e in '⚠️' '💬' '📝' '✅' '👀'; do
+  for e in '⚠️' '💬' '📝' '✅' '👀' '🔀'; do
     case "$rest" in
       "$e"'!'[0-9]*|"$e"'#'[0-9]*) rest="${rest#"$e"}"; break ;;
     esac
@@ -366,6 +368,38 @@ gci_open_pr() {
     return 1
   fi
   [ -n "$GCI_MR_IID" ] || { GCI_MR_IID=""; GCI_MR_URL=""; return 3; }
+  return 0
+}
+
+# Look up the MERGED MR/PR whose source/head branch is <branch>, so a positive "merged" badge
+# can replace the open-PR token once gci_open_pr reports none. Same shape as gci_open_pr: sets
+# globals (NOT stdout) GCI_MR_IID, GCI_MR_URL, GCI_MR_SIGIL ("!" GitLab / "#" GitHub) — all ""
+# on none/error — plus GCI_REVIEW="merged" on success. GitHub's state=closed returns closed
+# OR merged PRs, so merged is gated on `.merged_at != null`; GitLab's state=merged is already
+# merged-only. Return: 0 merged | 1 missing args | 2 api-error | 3 not merged.
+gci_merged_pr() {
+  local repo="$1" path="$2" branch="$3" provider="$4" enc resp owner
+  GCI_MR_IID=""; GCI_MR_URL=""; GCI_MR_SIGIL=""; GCI_REVIEW=""
+  [ -n "$path" ] && [ -n "$branch" ] || return 1
+  if [ "$provider" = "gitlab" ]; then
+    GCI_MR_SIGIL="!"
+    enc="$(gci_urlencode_path "$path")"
+    resp="$(cd "$repo" && glab api "projects/$enc/merge_requests?source_branch=$branch&state=merged&per_page=1" 2>/dev/null)" || return 2
+    GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].iid // empty' 2>/dev/null)"
+    GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].web_url // empty' 2>/dev/null)"
+  elif [ "$provider" = "github" ]; then
+    GCI_MR_SIGIL="#"
+    owner="${path%%/*}"
+    resp="$(cd "$repo" && gh api "repos/$path/pulls?head=$owner:$branch&state=closed&per_page=1" 2>/dev/null)" || return 2
+    if [ -n "$(printf '%s' "$resp" | jq -r '.[0].merged_at // empty' 2>/dev/null)" ]; then
+      GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].number // empty' 2>/dev/null)"
+      GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].html_url // empty' 2>/dev/null)"
+    fi
+  else
+    return 1
+  fi
+  [ -n "$GCI_MR_IID" ] || { GCI_MR_IID=""; GCI_MR_URL=""; return 3; }
+  GCI_REVIEW="merged"
   return 0
 }
 
