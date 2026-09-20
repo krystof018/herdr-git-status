@@ -74,7 +74,7 @@ build_frame() {
       "$(gci_hyperlink "$f_url" "#$f_id")" "$GCI_RED" "$GCI_RESET" "$(gci_relative_time "$f_upd")"
     shown=$((shown + 1))
     [ "$shown" -ge "$fail_max" ] && break
-  done < <(gci_failed_ci "$REPO" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER" $((fail_max + 1)))
+  done < <(gci_failed_ci "$REPO" "$GCI_CI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER" $((fail_max + 1)))
 
   printf '\n  %sr%s refresh · %sq%s quit · auto-refresh %ss\n' \
     "$GCI_BOLD" "$GCI_RESET" "$GCI_BOLD" "$GCI_RESET" "$INTERVAL"

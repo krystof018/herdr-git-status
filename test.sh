@@ -187,6 +187,22 @@ check "cwd-git-fallback" "$pt/plug" "$(gci_pick_pane_cwd wB "$pick_none")"
 check "cwd-git-none"     ""         "$(gci_pick_pane_cwd wZ "$pick_json")"
 rm -rf "$pt"
 
+# gci_upstream_path — fork checkouts: `upstream` remote on the SAME host as origin -> its
+# slug (used to retry PR/MR + CI lookups in the base repo); anything else -> empty.
+ut="$(mktemp -d)"
+git -C "$ut" init -q
+check "up-no-origin"   ""         "$(gci_upstream_path "$ut")"
+git -C "$ut" remote add origin git@github.com:me/app.git
+check "up-no-upstream" ""         "$(gci_upstream_path "$ut")"
+git -C "$ut" remote add upstream git@github.com:core/app.git
+check "up-same-host"   "core/app" "$(gci_upstream_path "$ut")"
+git -C "$ut" remote set-url upstream https://github.com/core/app
+check "up-https-form"  "core/app" "$(gci_upstream_path "$ut")"
+git -C "$ut" remote set-url upstream git@gitlab.com:core/app.git
+check "up-other-host"  ""         "$(gci_upstream_path "$ut")"
+check "up-nonrepo"     ""         "$(gci_upstream_path "$ut/nope")"
+rm -rf "$ut"
+
 # gci_daemon_alive — true only when <pidfile> exists and names a live process. Backs the
 # poller's is_running check and its self-healing `start` (which relaunches when this is false).
 dtmp="$(mktemp)"
