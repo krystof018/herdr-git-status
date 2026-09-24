@@ -30,10 +30,11 @@ ws_list() {
 # Resolve a repo's sidebar decoration into globals (NOT stdout) so it can run
 # without a subshell — that lets the MR/PR lookup reuse the path/branch/provider
 # that gci_latest_ci just resolved:
-#   SPACE_EMOJI  status emoji, "" (unsupported remote), or "SKIP" (transient error)
-#   SPACE_MR     open MR/PR token incl. sigil ("!123" / "#123") or "" (none)
+#   SPACE_EMOJI  CI status emoji; 🟣 (branch merged) or 📍 (local-only, never pushed)
+#                instead of a CI dot; "" (unsupported remote); or "SKIP" (transient error)
+#   SPACE_MR     open/merged MR/PR token incl. sigil ("!123" / "#123") or "" (none)
 status_for_repo() {
-  local cwd="$1" rc glyph
+  local cwd="$1" rc glyph default
   SPACE_EMOJI=""; SPACE_MR=""
   gci_latest_ci "$cwd"; rc=$?
   case $rc in
@@ -45,10 +46,35 @@ status_for_repo() {
       else
         SPACE_EMOJI="⚪"   # supported remote, but no pipeline/run for this branch
       fi
+
+      # The trunk branch is not a feature branch: show only its CI dot, never a PR/merged
+      # token. (A "merge main into X" PR has head=main, which would otherwise tag main 🟣.)
+      default="$(gci_default_branch "$cwd")"
+      [ -n "$default" ] && [ "$GCI_BRANCH" = "$default" ] && return
+
+      # A branch with no upstream and no origin/<branch> ref is either never pushed, or was
+      # merged and its remote branch deleted. A single merged-PR lookup disambiguates: 🟣 with
+      # the number if it landed (overrides the CI dot — "merged" is the more useful signal),
+      # else 📍 local-only. (No open PR is possible without a remote ref, so we skip that call.)
+      if gci_branch_is_local_only "$cwd" "$GCI_BRANCH"; then
+        if gci_merged_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
+          SPACE_EMOJI="$GCI_MERGED_EMOJI"
+          SPACE_MR="$GCI_MR_SIGIL$GCI_MR_IID"
+        else
+          SPACE_EMOJI="$GCI_LOCAL_EMOJI"
+        fi
+        return
+      fi
+
+      # Branch is on the remote: prefer the open PR (with its review-state badge); if none is
+      # open, fall back to the most recent merged one (🟣).
       if gci_open_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
         gci_review_for_mr "$cwd" "$GCI_PATH" "$GCI_MR_IID" "$GCI_PROVIDER"
         glyph="$(gci_review_badge_glyph "$GCI_REVIEW")"
         SPACE_MR="$glyph$GCI_MR_SIGIL$GCI_MR_IID"
+      elif gci_merged_pr "$cwd" "$GCI_PATH" "$GCI_BRANCH" "$GCI_PROVIDER"; then
+        SPACE_EMOJI="$GCI_MERGED_EMOJI"
+        SPACE_MR="$GCI_MR_SIGIL$GCI_MR_IID"
       fi
       ;;
   esac

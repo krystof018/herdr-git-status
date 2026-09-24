@@ -9,6 +9,14 @@ else
   GCI_RESET=''; GCI_GREEN=''; GCI_RED=''; GCI_YELLOW=''; GCI_GRAY=''; GCI_BLUE=''; GCI_BOLD=''
 fi
 
+# Sidebar glyphs for branch/PR lifecycle states that are NOT CI dots. Each takes the
+# leading "status dot" slot, so they sit in the same column as 🟢🟡🔴⚪ and read at a glance:
+#   🟣 the branch's PR/MR is merged (shown instead of the CI dot)
+#   📍 the branch is local-only — never pushed, so it has no remote CI or PR
+# Kept here as the single source of truth; gci_strip_ci_prefix strips the same glyphs.
+GCI_MERGED_EMOJI='🟣'
+GCI_LOCAL_EMOJI='📍'
+
 # Always-required tools. The provider CLI (glab for GitLab, gh for GitHub) is
 # checked per-repo in gci_latest_ci, since only one is needed for a given remote.
 gci_require_deps() {
@@ -218,7 +226,7 @@ gci_github_review_state() {
 # across re-applies and user renames. Both parts are optional, stripped independently.
 gci_strip_ci_prefix() {
   local rest="$1" e body num after
-  for e in '🟢' '🟡' '🔴' '⚪'; do
+  for e in '🟢' '🟡' '🔴' '⚪' '🟣' '📍'; do
     if [ "${rest#"$e" }" != "$rest" ]; then rest="${rest#"$e" }"; break; fi
     if [ "${rest#"$e"}"  != "$rest" ]; then rest="${rest#"$e"}";  break; fi
   done
@@ -366,6 +374,67 @@ gci_open_pr() {
     return 1
   fi
   [ -n "$GCI_MR_IID" ] || { GCI_MR_IID=""; GCI_MR_URL=""; return 3; }
+  return 0
+}
+
+# Look up the most recent MERGED MR/PR whose source/head branch is <branch> — the
+# counterpart to gci_open_pr, used when a branch has no *open* PR so the sidebar can
+# still show that its work landed (🟣 #123). Same globals/signature as gci_open_pr:
+# sets GCI_MR_IID, GCI_MR_URL, GCI_MR_SIGIL ("" on error/none).
+# Return: 0 found | 1 missing args | 2 api-error | 3 no merged MR/PR.
+gci_merged_pr() {
+  local repo="$1" path="$2" branch="$3" provider="$4" enc resp owner
+  GCI_MR_IID=""; GCI_MR_URL=""; GCI_MR_SIGIL=""
+  [ -n "$path" ] && [ -n "$branch" ] || return 1
+  if [ "$provider" = "gitlab" ]; then
+    GCI_MR_SIGIL="!"
+    enc="$(gci_urlencode_path "$path")"
+    resp="$(cd "$repo" && glab api "projects/$enc/merge_requests?source_branch=$branch&state=merged&per_page=1" 2>/dev/null)" || return 2
+    GCI_MR_IID="$(printf '%s' "$resp" | jq -r '.[0].iid // empty' 2>/dev/null)"
+    GCI_MR_URL="$(printf '%s' "$resp" | jq -r '.[0].web_url // empty' 2>/dev/null)"
+  elif [ "$provider" = "github" ]; then
+    GCI_MR_SIGIL="#"
+    owner="${path%%/*}"
+    # state=closed returns both merged and closed-unmerged PRs (newest-updated first); pick the
+    # most recent one that actually merged — a non-null merged_at. Taking just .[0] would report
+    # "no merged PR" whenever the newest closed PR is closed-unmerged, hiding an older real merge.
+    resp="$(cd "$repo" && gh api "repos/$path/pulls?head=$owner:$branch&state=closed&sort=updated&direction=desc&per_page=30" 2>/dev/null)" || return 2
+    GCI_MR_IID="$(printf '%s' "$resp" | jq -r 'map(select(.merged_at != null)) | .[0].number // empty' 2>/dev/null)"
+    GCI_MR_URL="$(printf '%s' "$resp" | jq -r 'map(select(.merged_at != null)) | .[0].html_url // empty' 2>/dev/null)"
+  else
+    return 1
+  fi
+  [ -n "$GCI_MR_IID" ] || { GCI_MR_IID=""; GCI_MR_URL=""; return 3; }
+  return 0
+}
+
+# Is <branch> local-only — i.e. never pushed, so it has no remote CI or PR? True (return 0)
+# when the branch has neither an upstream tracking ref configured nor an origin/<branch>
+# remote-tracking ref. Pure git, no network call. Return 1 otherwise (tracks a remote, args
+# missing, or the branch doesn't exist locally). <repo> is the worktree path; <branch> the
+# current branch name. <repo> is required: an empty repo would let `git -C` fall through to the
+# caller's CWD and misclassify an unrelated branch.
+gci_branch_is_local_only() {
+  local repo="$1" branch="$2"
+  [ -n "$repo" ] && [ -n "$branch" ] || return 1
+  git -C "$repo" show-ref --verify --quiet "refs/heads/$branch" || return 1
+  git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name "$branch@{upstream}" >/dev/null 2>&1 && return 1
+  git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch" && return 1
+  return 0
+}
+
+# Print the repo's default branch (trunk) name, e.g. "main" — resolved from the local
+# origin/HEAD symbolic ref (set at clone time, or via `git remote set-head origin -a`), with
+# a fall back to origin/main then origin/master when origin/HEAD isn't set. Empty if unknown.
+# Pure git, no network. Used to skip PR/merged decoration on the trunk: a "merge main into X"
+# PR has head=main, and the trunk is not a feature branch worth tagging.
+gci_default_branch() {
+  local repo="$1" ref
+  ref="$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" \
+    && { printf '%s' "${ref#origin/}"; return 0; }
+  for ref in main master; do
+    git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$ref" && { printf '%s' "$ref"; return 0; }
+  done
   return 0
 }
 

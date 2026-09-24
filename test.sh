@@ -56,6 +56,19 @@ check "strip-mr-only"    "standalone"   "$(gci_strip_ci_prefix '!42 standalone')
 check "strip-mr-notnum"  "!abc foo"     "$(gci_strip_ci_prefix '!abc foo')"
 check "strip-mr-bang"    "!important"   "$(gci_strip_ci_prefix '!important')"
 
+# Lifecycle glyphs (single source of truth in lib.sh)
+check "emoji-merged"  "🟣" "$GCI_MERGED_EMOJI"
+check "emoji-local"   "📍" "$GCI_LOCAL_EMOJI"
+
+# gci_strip_ci_prefix with the merged (🟣 #123) and local-only (📍) leading glyphs
+check "strip-merged-pr"   "web-app"    "$(gci_strip_ci_prefix '🟣 #123 web-app')"
+check "strip-merged-mr"   "inventory"  "$(gci_strip_ci_prefix '🟣 !250 inventory')"
+check "strip-local"       "my-feature" "$(gci_strip_ci_prefix '📍 my-feature')"
+check "strip-local-idem"  "my-feature" "$(gci_strip_ci_prefix "$(gci_strip_ci_prefix '📍 my-feature')")"
+
+# gci_merged_pr — arg validation (no network)
+gci_merged_pr "/tmp" "" "" github >/dev/null 2>&1; check "merged-noargs-1" "1" "$?"
+
 # gci_hyperlink — NO_COLOR/non-tty falls back to plain text (no escape sequences)
 check "hyperlink-plain"  "!123"         "$(gci_hyperlink 'https://gitlab.com/x/-/merge_requests/123' '!123')"
 
@@ -92,6 +105,32 @@ git -C "$ptdir" remote set-url origin 'https://bitbucket.org/x/y.git' 2>/dev/nul
 check "title-other"  "CI"        "$(gci_pane_title "$ptdir")"
 check "title-norepo" "CI"        "$(gci_pane_title "$ptdir/nonexistent")"
 rm -rf "$ptdir"
+
+# gci_branch_is_local_only — pure git, no network
+lodir="$(mktemp -d)"
+git -C "$lodir" init -q 2>/dev/null
+git -C "$lodir" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>/dev/null
+lobr="$(git -C "$lodir" rev-parse --abbrev-ref HEAD)"
+gci_branch_is_local_only "$lodir" "$lobr"; check "local-only-yes" "0" "$?"   # never pushed
+git -C "$lodir" update-ref "refs/remotes/origin/$lobr" HEAD 2>/dev/null      # simulate a pushed branch
+gci_branch_is_local_only "$lodir" "$lobr"; check "local-only-no"  "1" "$?"
+gci_branch_is_local_only "$lodir" ""; check "local-only-noarg" "1" "$?"
+gci_branch_is_local_only "" "$lobr"; check "local-only-norepo" "1" "$?"   # empty repo must not fall through to CWD
+gci_branch_is_local_only "$lodir" "no-such-branch"; check "local-only-nobranch" "1" "$?"
+rm -rf "$lodir"
+
+# gci_default_branch — from origin/HEAD, with origin/main|master fallback
+dbdir="$(mktemp -d)"
+git -C "$dbdir" init -q 2>/dev/null
+git -C "$dbdir" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>/dev/null
+check "default-none" "" "$(gci_default_branch "$dbdir")"                  # no remote refs yet
+git -C "$dbdir" update-ref refs/remotes/origin/master HEAD 2>/dev/null
+check "default-master-fallback" "master" "$(gci_default_branch "$dbdir")" # origin/master present
+git -C "$dbdir" update-ref refs/remotes/origin/main HEAD 2>/dev/null
+check "default-main-fallback" "main" "$(gci_default_branch "$dbdir")"     # origin/main preferred
+git -C "$dbdir" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master 2>/dev/null
+check "default-head-ref" "master" "$(gci_default_branch "$dbdir")"        # origin/HEAD wins
+rm -rf "$dbdir"
 
 # gci_review_glyph — full canonical vocabulary -> emoji
 check "rg-conflict" "⚠️" "$(gci_review_glyph conflict)"
