@@ -212,6 +212,21 @@ gci_github_review_state() {
   printf 'awaiting'
 }
 
+# Derive the canonical review state from a GitHub PR-review GraphQL response. Prints the
+# state, or nothing when the pullRequest object is absent (query failed / PR not found).
+# Kept pure (response passed in $1) so it is unit-testable without invoking gh.
+# NOTE: presence is checked on the pullRequest object, NOT on isDraft — in jq
+# `false // empty` collapses to empty, so an isDraft guard dropped every non-draft PR.
+gci_github_review_from_resp() {
+  local resp="$1" pr='.data.repository.pullRequest' draft mergeable decision unresolved
+  [ "$(printf '%s' "$resp" | jq -r "if $pr then \"1\" else empty end" 2>/dev/null)" = "1" ] || return 0
+  draft="$(printf '%s' "$resp" | jq -r "$pr.isDraft" 2>/dev/null)"
+  mergeable="$(printf '%s' "$resp" | jq -r "$pr.mergeable // \"UNKNOWN\"" 2>/dev/null)"
+  decision="$(printf '%s' "$resp" | jq -r "$pr.reviewDecision // \"\"" 2>/dev/null)"
+  unresolved="$(printf '%s' "$resp" | jq -r "[$pr.reviewThreads.nodes[]? | select(.isResolved==false)] | length" 2>/dev/null)"
+  gci_github_review_state "$draft" "$mergeable" "$decision" "${unresolved:-0}"
+}
+
 # Remove the CI decoration the poller prepends to a label: a leading status emoji
 # (with optional following space) and then an optional "!<digits> " (GitLab MR) or
 # "#<digits> " (GitHub PR) token. Byte-safe (prefix removal), so it stays idempotent
@@ -377,7 +392,7 @@ gci_open_pr() {
 # Args: repo path iid provider
 gci_review_for_mr() {
   local repo="$1" path="$2" iid="$3" provider="$4"
-  local enc resp dms blocking draft mergeable decision unresolved owner name
+  local enc resp dms blocking owner name
   GCI_REVIEW=""
   [ -n "$path" ] && [ -n "$iid" ] || return 0
   if [ "$provider" = "gitlab" ]; then
@@ -400,12 +415,7 @@ gci_review_for_mr() {
           }
         }
       }' 2>/dev/null)" || return 0
-    draft="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.isDraft // empty' 2>/dev/null)"
-    [ -n "$draft" ] || return 0
-    mergeable="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.mergeable // "UNKNOWN"' 2>/dev/null)"
-    decision="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewDecision // ""' 2>/dev/null)"
-    unresolved="$(printf '%s' "$resp" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved==false)] | length' 2>/dev/null)"
-    GCI_REVIEW="$(gci_github_review_state "$draft" "$mergeable" "$decision" "${unresolved:-0}")"
+    GCI_REVIEW="$(gci_github_review_from_resp "$resp")"
   fi
   return 0
 }
